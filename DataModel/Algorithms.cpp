@@ -1,6 +1,7 @@
 // -*- mode:c++; tab-width:4; -*-
 /* vim:set noexpandtab tabstop=4 wrap */
 #include "Algorithms.h"
+#include "Constants.h"
 //#include <libgen.h>  // dirname and basename
 //#include <sys/stat.h>  // dirname and basename
 //#include <sys/types.h> // for stat() test to see if file or folder
@@ -10,6 +11,11 @@
 //#include <cstring>  // strncpy
 #include <fstream>
 #include <sstream>
+
+#include "TStyle.h"
+#include "TColor.h"
+#include "TVector3.h"
+#include "TLorentzVector.h"
 
 int ReadListFromFile(std::string filename, std::vector<std::string> &lines, char commentchar, bool trim_whitespace){
 	// read each new line into a std::vector<string> and return
@@ -86,4 +92,37 @@ std::string end_stderr_capture(std::streambuf* previous_buff){
 	return capture;
 }
 
+void SetRootColourPlotStyle(){
+	const int NRGBs = 5;
+	const int NCont = 255;
+	
+	double stops[NRGBs] = { 0.00, 0.34, 0.61, 0.84, 1.00 };
+	double red[NRGBs]   = { 0.00, 0.00, 0.87, 1.00, 0.51 };
+	double green[NRGBs] = { 0.00, 0.81, 1.00, 0.20, 0.00 };
+	double blue[NRGBs]  = { 0.51, 1.00, 0.12, 0.00, 0.00 };
+	TColor::CreateGradientColorTable(NRGBs, stops, red, green, blue, NCont);
+	gStyle->SetNumberContours(NCont);
+}
+
+double MomentumToEnergy(basic_array<float>& mom, int pdg){
+	double mass = PdgToMass(pdg);
+	if(mass<0) return -1;
+	double momsq = pow(mom[0],2)+pow(mom[1],2)+pow(mom[2],2);
+	return sqrt(momsq+pow(mass,2));
+}
+
+double MomentumToEnergy(TVector3& mom, int pdg){
+	double mass = PdgToMass(pdg);
+	if(mass<0) return -1;
+	double momsq = pow(mom[0],2)+pow(mom[1],2)+pow(mom[2],2);
+	return sqrt(momsq+pow(mass,2));
+}
+
+double Mag2(basic_array<float>& mom){
+	return pow(mom[0],2)+pow(mom[1],2)+pow(mom[2],2);
+}
+
+double Mag(basic_array<float>& mom){
+	return sqrt(Mag(mom));
+}
 

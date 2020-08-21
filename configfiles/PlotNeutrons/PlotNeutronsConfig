@@ -1,5 +1,0 @@
-# vim: filetype=Makefile #
-# PlotNeutrons config file
-verbosity 10
-drawPlots 1    # whether to show root plots during execution
-

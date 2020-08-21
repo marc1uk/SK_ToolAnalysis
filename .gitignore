@@ -7,15 +7,7 @@ main
 RemoteControl
 NodeDaemon
 
+*.d
+*.root
+
 *~
-
-
-
-
-	rm -f include/*.h
-	rm -f lib/*.so
-	rm -f main
-	rm -f RemoteControl
-	rm -f NodeDaemon
-	rm -f UserTools/*/*.o
-	rm -f DataModel/*.o

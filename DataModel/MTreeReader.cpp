@@ -256,11 +256,24 @@ int MTreeReader::Clear(){
 int MTreeReader::GetEntry(long entry_number){
 	// if we've been requested to invoke Clear() on all objects before each Get, do so
 	if(verbosity>3) std::cout<<"MTreeReader GetEntry "<<entry_number<<std::endl;
-	if(autoclear) Clear();
+	if(autoclear){
+		int clear_ok = Clear();
+		if(not clear_ok){ return -2; }
+	}
 	
 	// load data from tree
+	// The function returns the number of bytes read from the input buffer.
+	// If entry does not exist the function returns 0. If an I/O error occurs, the function returns -1.
 	auto bytesread = thetree->GetEntry(entry_number);
 	return bytesread;
+}
+
+long MTreeReader::GetEntriesFast(){
+	return thetree->GetEntriesFast();  // FIXME for TChain
+}
+
+long MTreeReader::GetEntries(){
+	return thetree->GetEntries();
 }
 
 MTreeReader::~MTreeReader(){
