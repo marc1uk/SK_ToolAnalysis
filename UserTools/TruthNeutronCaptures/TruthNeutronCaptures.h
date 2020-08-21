@@ -164,34 +164,28 @@ class TruthNeutronCaptures: public Tool {
 	int out_subevent_number;
 	
 	// primary particle - an event can have many primary particles
-//	std::vector<int> out_primary_id;
 	std::vector<int> out_primary_pdg;
-	std::vector<double> out_primary_energy; // [MeV]
-	std::vector<TLorentzVector> out_primary_start_pos; // [cm, ns]
-	std::vector<TLorentzVector> out_primary_end_pos; // [cm, ns]
+	std::vector<double> out_primary_energy;                          // [MeV]
+	std::vector<TLorentzVector> out_primary_start_pos;               // [cm, ns]
+	std::vector<TLorentzVector> out_primary_end_pos;                 // [cm, ns]
 	
 	// parent nuclide - potentially many per event
-//	std::vector<int> out_parent_primary_id;
-//	std::vector<int> out_nuclide_id; // so we can pair neutrons to their parent
 	std::vector<int> out_nuclide_pdg;
-	std::vector<TLorentzVector> out_nuclide_creation_pos; // [cm, ns]  - likely to not go far but just in case
-	std::vector<TLorentzVector> out_nuclide_decay_pos; // [cm, ns]
+	std::vector<TLorentzVector> out_nuclide_creation_pos;            // [cm, ns]
+	std::vector<TLorentzVector> out_nuclide_decay_pos;               // [cm, ns]
 	std::vector<int> out_nuclide_daughter_pdg;
 	
 	// neutrons  - potentially many per nuclide? or just one?
-//	std::vector<std::vector<int> > out_parent_nuclide_id;
-//	std::vector<std::vector<int> > out_neutron_id; // so we can pair gammas to their neutrons
 	std::vector<std::vector<TLorentzVector> > out_neutron_start_pos; // [cm, ns]
-	std::vector<std::vector<TLorentzVector> > out_neutron_end_pos; // [cm, ns]
-	std::vector<std::vector<double> > out_neutron_start_energy; // [MeV]
-	std::vector<std::vector<double> > out_neutron_end_energy; // [MeV] - on capture/decay
-	std::vector<std::vector<int> > out_neutron_end_process; // enum to map to e.g. capture, decay, escape world...
+	std::vector<std::vector<TLorentzVector> > out_neutron_end_pos;   // [cm, ns]
+	std::vector<std::vector<double> > out_neutron_start_energy;      // [MeV]
+	std::vector<std::vector<double> > out_neutron_end_energy;        // [MeV] - on capture/decay
+	std::vector<std::vector<int> > out_neutron_end_process;          // geant3 process code
 	std::vector<std::vector<int> >out_neutron_ndaughters;
 	
 	// gammas - potentially many per neutron
-//	std::vector<std::vector<std::vector<int> > > out_parent_neutron_id;
 	std::vector<std::vector<std::vector<double> > > out_gamma_energy; // [MeV]
-	std::vector<std::vector<std::vector<double> > > out_gamma_time; // [ns] since?
+	std::vector<std::vector<std::vector<double> > > out_gamma_time;   // [ns] since?
 	
 	// detector information
 	// total charge? time distribution of hits?

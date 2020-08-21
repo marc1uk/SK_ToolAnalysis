@@ -3,7 +3,7 @@ include $(SKOFL_ROOT)/config.gmk
 # user library paths
 LDFLAGS = -L/HOME/LinuxSystemFiles/SK/skrootlibs -L/HOME/LinuxSystemFiles/SK/stllibs
 # user libraries
-LOCAL_LIBS = #-lRootStl -lSkroot
+LOCAL_LIBS = -lRootStl #-lSkroot  ## why do we have -lskroot (twice) and lSkroot??
 
 LD_RUN_PATH=$(SKOFL_LIBDIR):$(A_LIBDIR)
 
@@ -18,7 +18,9 @@ BoostLib= -L $(ToolDAQPath)/boost_1_66_0/install/lib -lboost_date_time -lboost_s
 BoostInclude= -I $(ToolDAQPath)/boost_1_66_0/install/include
 
 RootInclude= `root-config --cflags`
-RootLib= `root-config --libs` # --glibs
+RootLib= `root-config --libs --evelibs`
+# --glibs
+# --evelibs for TParticlePDG
 
 DataModelInclude = $(RootInclude)
 DataModelLib = $(RootLib)

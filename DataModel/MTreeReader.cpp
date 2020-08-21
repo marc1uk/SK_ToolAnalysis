@@ -118,6 +118,37 @@ int MTreeReader::ParseBranches(){
 	return 1;
 }
 
+int MTreeReader::UpdateBranchPointer(std::string branchname){
+	if(leaf_pointers.count(branchname)==0) return 0;
+	TLeaf* lf = leaf_pointers.at(branchname);
+	intptr_t objpp;
+	if(branch_isobject.at(branchname)){
+		// objects need another level of indirection
+		TBranchElement* bev = (TBranchElement*)lf->GetBranch();
+		objpp=reinterpret_cast<intptr_t>(bev->GetObject());
+	} else {
+		objpp=reinterpret_cast<intptr_t>(lf->GetValuePointer());
+	}
+	branch_value_pointers.emplace(branchname,objpp);
+	return 1;
+}
+
+int MTreeReader::UpdateBranchPointers(){
+	// assume we only need to re-check dynamic arrays? Objects won't move, right?
+	// dynamically sized arrays may do, if more space is required...
+	for(auto&& abranch : branch_isarray){
+		if(abranch.second){
+			// fixed sized arrays won't need to be reallocated
+			// so only update pointers if we don't have a cached (constant) size
+			if(branch_dims_cache.count(abranch.first)==0){
+				int ok = UpdateBranchPointer(abranch.first);
+				if(not ok) return ok;
+			}
+		}
+	}
+	return 1;
+}
+
 int MTreeReader::ParseBranchDims(std::string branchname){
 	// parse branch title for sequences of type '[X]' suggesting an array
 	// extract 'X'. Scan the list of branch names for 'X', in which case

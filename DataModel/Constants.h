@@ -1,4 +1,6 @@
 /* vim:set noexpandtab tabstop=4 wrap */
+#ifndef Constants_h
+#define Constants_h
 
 #include <string>
 #include <map>
@@ -399,4 +401,4 @@ namespace constants{
 	
 }
 
-
+#endif // define Constants_h

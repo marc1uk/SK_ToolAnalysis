@@ -1,14 +1,6 @@
 /* vim:set noexpandtab tabstop=4 wrap */
 #include "RootReadTest.h"
 
-#include "TROOT.h"
-#include "TInterpreter.h"
-#include "TSystem.h"
-#include "TFile.h"
-#include "TTree.h"
-#include "TLeaf.h"
-#include "TParameter.h"
-
 #include "type_name_as_string.h"
 
 #include <iostream>
@@ -28,8 +20,9 @@ bool RootReadTest::Initialise(std::string configfile, DataModel &data){
 	m_variables.Get("inputFile",inputFile);
 	m_variables.Get("treeName",treeName);
 	m_variables.Get("testFileType",testFileType);
+	m_variables.Get("maxEvents",maxEvents);
 	
-	myTreeReader.Load(inputFile, treeName);
+	myTreeReader.Load(inputFile, treeName);  // will pre-load entry 0
 	myTreeReader.SetVerbosity(1);
 	entrynum=0;
 	
@@ -39,32 +32,73 @@ bool RootReadTest::Initialise(std::string configfile, DataModel &data){
 bool RootReadTest::Execute(){
 	std::cout<<"ReadRootTest getting entry "<<entrynum<<std::endl;
 	
+	// ttree entry is already pre-loaded,
+	// so just retrieve the desired branches
 	if(testFileType=="official_ntuple"){
-		int get_ok = ReadEntryNtuple(entrynum);
-		CheckEntryNtuple();
+		get_ok = GetBranchesNtuple();
+	}
+	else if(testFileType=="SKROOT"){
+		get_ok = GetBranchesSKROOT();
 	}
 	
-	if(testFileType=="SKROOT"){
-		int get_ok = ReadEntrySKROOT(entrynum);
+	// process the data
+	if(testFileType=="official_ntuple"){
+		CheckEntryNtuple();
+	}
+	else if(testFileType=="SKROOT"){
 		CheckEntrySKROOT();
 	}
 	
+	// move to next entry
 	entrynum++;
-	if(entrynum==3){
-		std::cout<<"setting StopLoop"<<std::endl;
+	// check if we've hit the user-requested entry limit
+	if((maxEvents>0)&&(entrynum==maxEvents)){
+		std::cout<<"hit max events, setting StopLoop"<<std::endl;
 		m_data->vars.Set("StopLoop",1);
+		return 1;
 	}
+	
+	// otherwise, pre-load the next ttree entry.
+	// we do this now so that we can prevent the next iteration (by setting StopLoop) should we
+	// find that we've hit the end of the TChain, or there is an error reading the next entry.
+	// This ensures downstream tools always have valid data to process.
+	get_ok = ReadEntry(entrynum);
+	if(get_ok==0){
+		return 1; // end of file
+	} else if (get_ok<0){
+		return 0; // read error
+	}
+	
+	return get_ok;
+}
+
+
+bool RootReadTest::Finalise(){
 	
 	return true;
 }
 
-// Official Ntuple
-// ---------------
-
-int RootReadTest::ReadEntryNtuple(long entry_number){
+int RootReadTest::ReadEntry(long entry_number){
+	// load next entry data from TTree
 	int bytesread = myTreeReader.GetEntry(entrynum);
-	if(bytesread<=0) return false;
 	
+	// stop loop if we ran off the end of the tree
+	if(bytesread==0){
+		std::cout<<"ReadRootTest Hit end of input file, stopping loop"<<std::endl;
+		m_data->vars.Set("StopLoop",1);
+	}
+	// stop loop if we had an error of some kind
+	else if(bytesread<0){
+		 if(bytesread==-1) std::cerr<<"ReadRootTest IO error loading next input entry!"<<std::endl;
+		 if(bytesread==-2) std::cerr<<"ReadRootTest AutoClear error loading next input entry!"<<std::endl;
+		 if(bytesread <-2) std::cerr<<"ReadRootTest Unknown error loading next input entry!"<<std::endl;
+		 m_data->vars.Set("StopLoop",1);
+	}
+	
+	return bytesread;
+}
+
+int RootReadTest::GetBranchesNtuple(){
 	int success = 
 	(myTreeReader.GetBranchValue("nscndprt", n_secondaries_2)) &&
 	(myTreeReader.GetBranchValue("iprtscnd", secondary_PDG_code_2)) &&
@@ -73,6 +107,17 @@ int RootReadTest::ReadEntryNtuple(long entry_number){
 	return success;
 }
 
+int RootReadTest::GetBranchesSKROOT(){
+	int success = 
+	(myTreeReader.GetBranchValue("MC", mc_info)) &&
+	(myTreeReader.GetBranchValue("HEADER", file_header));
+	
+	return success;
+}
+
+
+// Official Ntuple
+// ---------------
 int RootReadTest::CheckEntryNtuple(){
 	std::cout<<"we had "<<n_secondaries_2<<" secondaries"<<std::endl;
 	
@@ -95,20 +140,8 @@ int RootReadTest::CheckEntryNtuple(){
 	return 1;
 }
 
-// SKROOT files
-// -------------
-
-int RootReadTest::ReadEntrySKROOT(long entry_number){
-	int bytesread = myTreeReader.GetEntry(entrynum);
-	if(bytesread<=0) return false;
-	
-	int success = 
-	(myTreeReader.GetBranchValue("MC", mc_info)) &&
-	(myTreeReader.GetBranchValue("HEADER", file_header));
-	
-	return success;
-}
-
+// SKROOT
+// ------
 int RootReadTest::CheckEntrySKROOT(){
 	std::cout<<"MCInfo is at "<<mc_info<<std::endl;
 	std::cout<<"we had "<<mc_info->nvc<<" primaries"<<std::endl;
@@ -125,8 +158,3 @@ int RootReadTest::CheckEntrySKROOT(){
 	return 1;
 }
 
-
-bool RootReadTest::Finalise(){
-	
-	return true;
-}

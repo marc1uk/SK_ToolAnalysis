@@ -6,10 +6,6 @@
 
 #include <algorithm> // std::find
 
-#include "TROOT.h"
-#include "TSystem.h"
-#include "TApplication.h"
-
 #include "TFile.h"
 #include "TTree.h"
 #include "TChain.h"
@@ -51,7 +47,8 @@ bool TruthNeutronCaptures::Initialise(std::string configfile, DataModel &data){
 	
 	// open the input TFile and TTree
 	// ------------------------------
-	myTreeReader.Load(inputFile, "h1"); // official ntuple TTree is descriptively known as 'h1'
+	get_ok = myTreeReader.Load(inputFile, "h1"); // official ntuple TTree is descriptively known as 'h1'
+	if(get_ok) ReadEntryNtuple(0);
 	
 	// create the output TFile and TTree
 	// ---------------------------------
@@ -64,46 +61,38 @@ bool TruthNeutronCaptures::Execute(){
 	
 	Log(toolName+" processing entry "+toString(entry_number),v_debug,verbosity);
 	
-	// clear output vectors
-	// --------------------
-	// so we don't carry anything over
+	// clear output vectors so we don't carry anything over
 	Log(toolName+" clearing output vectors",v_debug,verbosity);
 	ClearOutputTreeBranches();
 	
 	// Copy over directly transferred variables
-	// -----------------------------------------
+	Log(toolName+" copying output vectors",v_debug,verbosity);
 	CopyVariables();
 	
 	// Calculate derived variables
-	// ---------------------------
+	Log(toolName+" calculating output variables",v_debug,verbosity);
 	CalculateVariables();
 	
-	// Optionally print the information about the current event
-	// --------------------------------------------------------
+	// print the current event
 	if(verbosity>1) PrintBranches();
 	
 	// Fill the output tree
-	// --------------------
 	Log(toolName+"filling output TTree entry",v_debug,verbosity);
 	outtree->Fill();
 	
-	// intermittently update the output file
-	// --------------------------------------
+	// update the output file so we don't lose everything if we crash
 	if((entry_number%WRITE_FREQUENCY)==0) WriteTree();
 	
 	// stop at user-defined limit to the number of events to process
-	// --------------------------------------------------------------
+	++entry_number;
 	if((MAX_EVENTS>0)&&(entry_number>=MAX_EVENTS)){
 		Log(toolName+" reached MAX_EVENTS, setting StopLoop",v_error,verbosity);
 		m_data->vars.Set("StopLoop",1);
 	} else {
-		// Pre-Load next input entry
-		// -------------------------
-		// so we can check if we're about to run off the end of the tree
-		++entry_number;
+		// Pre-Load next input entry so we can stop the toolchain
+		// if we're about to run off the end of the tree or encounter a read error
 		get_ok = ReadEntryNtuple(entry_number);
 		if(get_ok==0){
-			// ran off end of TTree, stop the looping
 			m_data->vars.Set("StopLoop",1);
 			Log(toolName+" Hit end of input file, stopping loop",v_warning,verbosity);
 		}
@@ -127,7 +116,7 @@ bool TruthNeutronCaptures::Finalise(){
 	// -----------------------------------------------
 	get_ok = WriteTree();
 	if(not get_ok){
-		std::cerr<<"Error writing output TTree!"<<std::endl;
+		Log(toolName+" Error writing output TTree!",v_error,verbosity);
 	}
 	
 	// Close and delete the file handle
@@ -164,6 +153,18 @@ int TruthNeutronCaptures::CalculateVariables(){
 	int neutron_pdg = 2112; //StringToPdg("Neutron");
 	int neutron_g3 = 13; //StringToG3ParticleCode("Neutron");
 	int gamma_pdg = 22; //StringToPdg("Gamma");
+	double neutron_mass = PdgToMass(neutron_pdg);
+	
+	// note the primary event vertex. Primary particles don't have individual start vertices,
+	// but they *should* all start from the primary event vertex ... unless the geant3 event
+	// had primaries at different locations. Which is entirely reasonable. In that case,
+	// we may need to use the daughters' "parent vertex at birth" branch to find our primary
+	// start vertices.... FIXME for events that should have all particles originating from a
+	// single primary event vertex, these are not consistent... why not??
+	TLorentzVector primary_vertex_tvector(primary_event_vertex.at(0),
+										  primary_event_vertex.at(1),
+										  primary_event_vertex.at(2),
+										  0.f); // is this correct? does this define T=0?
 	
 	// loop over event particles and scan for neutrons
 	// we want to nest them in their parent nuclides, but we need to find the neutrons first
@@ -190,6 +191,9 @@ int TruthNeutronCaptures::CalculateVariables(){
 	std::vector<TLorentzVector> parent_nuclide_creation_pos;
 	std::vector<int> nuclide_daughter_pdg;
 	
+	// ==========================
+	// SCAN FOR PRIMARY NEUTRONS
+	// ==========================
 	// loop over the primary particles first, because for IBD events we have a primary neutron
 	Log(toolName+" event had "+toString(n_outgoing_primaries)+" primary particles",v_debug,verbosity);
 	for(int primary_i=0; primary_i<n_outgoing_primaries; ++primary_i){
@@ -200,12 +204,10 @@ int TruthNeutronCaptures::CalculateVariables(){
 			Log(toolName+" NEUTRON!", v_debug,verbosity);
 			primary_n_ind_to_loc.emplace(primary_i,neutron_start_energy.size());
 			// note neutron info
-			TLorentzVector startpos(primary_event_vertex.at(0),
-									primary_event_vertex.at(1),
-									primary_event_vertex.at(2),
-									0.f);  // XXX is this correct? no primary vertex time - defines 0???
-			neutron_start_pos.push_back(startpos);
-			neutron_start_energy.push_back(primary_start_mom.at(primary_i));
+			neutron_start_pos.push_back(primary_vertex_tvector);
+			double startE = pow(primary_start_mom.at(primary_i),2.) / (2.*neutron_mass);
+			// FIXME primary momenta appear to be in different units to secondaries...? Need to convert to MeV
+			neutron_start_energy.push_back(startE);
 			neutron_ndaughters.push_back(0);  // XXX which branch???
 			
 			// note its parent nuclide information
@@ -242,6 +244,9 @@ int TruthNeutronCaptures::CalculateVariables(){
 	}
 	Log(toolName+" found "+toString(neutron_start_energy.size())+" primary neutrons", v_debug,verbosity);
 	
+	// ===========================
+	// SCAN FOR SECONDARY NEUTRONS
+	// ===========================
 	Log(toolName+" event had "+toString(n_secondaries_2)+" secondary particles",v_debug,verbosity);
 	for(int secondary_i=0; secondary_i<n_secondaries_2; ++secondary_i){
 		Log(toolName+" secondary "+toString(secondary_i)+" had pdg "+toString(secondary_PDG_code_2.at(secondary_i))
@@ -259,7 +264,7 @@ int TruthNeutronCaptures::CalculateVariables(){
 			TVector3 startmom(secondary_start_mom_2.at(secondary_i).at(0),
 							  secondary_start_mom_2.at(secondary_i).at(1),
 							  secondary_start_mom_2.at(secondary_i).at(2));
-			double startE = startmom.Mag();
+			double startE = startmom.Mag2() / (2.*neutron_mass);
 			neutron_start_energy.push_back(startE);
 			neutron_ndaughters.push_back(secondary_n_daughters.at(secondary_i));
 			
@@ -295,9 +300,15 @@ int TruthNeutronCaptures::CalculateVariables(){
 	}
 	Log(toolName+" found "+toString(neutron_start_energy.size())+" primary+secondary neutrons", v_debug,verbosity);
 	
+	// ==================================
+	// SCAN FOR GAMMAS AND CAPTURE NUCLEI
+	// ==================================
 	// scan again, this time looking for gammas
 	int n_gammas=0;  // for debug
 	for(int secondary_i=0; secondary_i<n_secondaries_2; ++secondary_i){
+		// ---------------
+		// Scan for Gammas
+		// ---------------
 		if(secondary_PDG_code_2.at(secondary_i)==gamma_pdg){
 			Log(toolName+" GAMMA!", v_debug,verbosity);
 			n_gammas++;
@@ -396,10 +407,10 @@ int TruthNeutronCaptures::CalculateVariables(){
 					TVector3 parent_neutron_start_mom(parent_init_mom.at(secondary_i).at(0),
 													  parent_init_mom.at(secondary_i).at(1),
 													  parent_init_mom.at(secondary_i).at(2));
-					if(parent_neutron_start_mom.Mag()!=neutron_start_energy.at(neutron_parent_loc)){
-						std::cout<<"WARNING, NEUTRON START ENERGY FROM PARENT POSITION AT BIRTH ("
-								 <<parent_neutron_start_mom.Mag()<<") "
-								 <<" DIFFERS FROM NEUTRON START ENERGY FROM NEUTRON ITSELF ("
+					double nStartE = parent_neutron_start_mom.Mag2() / (2.*neutron_mass);
+					if(nStartE!=neutron_start_energy.at(neutron_parent_loc)){
+						std::cout<<"WARNING, NEUTRON START ENERGY FROM PARENT AT BIRTH ("<<nStartE
+								 <<") DIFFERS FROM NEUTRON START ENERGY FROM NEUTRON ITSELF ("
 								 <<neutron_start_energy.at(neutron_parent_loc)<<") "<<std::endl;
 					}
 				}
@@ -417,6 +428,9 @@ int TruthNeutronCaptures::CalculateVariables(){
 			// otherwise this is just a plain old gamma. Valid parent, primary or secondary but not both,
 			// not from ncapture, and whose parent is not a neutron. Not interested.
 		}
+		// ------------------------
+		// Scan for Daughter Nuclei
+		// ------------------------
 		else if((secondary_gen_process.at(secondary_i)==18)&&
 				(secondary_PDG_code_2.at(secondary_i)!=neutron_pdg)){
 			// if it's not a neutron but came from neutron capture it's the daughter nuclide
@@ -462,12 +476,14 @@ int TruthNeutronCaptures::CalculateVariables(){
 					continue;
 				}
 				nuclide_daughter_pdg.at(neutron_parent_loc) = secondary_PDG_code_2.at(secondary_i);
-				// TODO any other daughter nuclide information we want to store?
 			}
 		} // end if from ncapture
 	} // end scan for gammas/daughter nuclides
 	Log(toolName+" found "+toString(n_gammas)+" gammas", v_debug,verbosity);
 	
+	// ==========================
+	// TRANSFER TO OUTPUT VECTORS
+	// ==========================
 	// ok now we can create the desired output structure
 	std::map<int, int> nuclide_id; // map known nuclide indices (in secondaries array) to index in nuclide vector
 	for(int neutron_i=0; neutron_i<neutron_start_energy.size(); ++neutron_i){
@@ -512,13 +528,17 @@ int TruthNeutronCaptures::CalculateVariables(){
 	}
 	Log(toolName+" logged "+toString(out_nuclide_pdg.size())+" nuclides", v_debug,verbosity);
 	
-	// TODO
-	// primary particle
-////	out_primary_id = 
-//	out_primary_pdg = 
-//	out_primary_energy = 
-//	out_primary_start_pos = 
-//	out_primary_end_pos = 
+	// record all primaries...? do we need this info?
+	for(int primary_i=0; primary_i<n_outgoing_primaries; ++primary_i){
+		int primary_pdg_code = G3ParticleCodeToPdg(primary_G3_code.at(primary_i));
+		out_primary_pdg.push_back(primary_pdg_code);
+		double mom_sq = pow(primary_start_mom.at(primary_i),2.);
+		double mass = PdgToMass(primary_pdg_code);
+		mass = (mass==0) ? 1 : mass;
+		out_primary_energy.push_back(mom_sq/(2.*mass));
+		out_primary_start_pos.push_back(primary_vertex_tvector); // not sure about the validity of this
+		out_primary_end_pos.push_back(TLorentzVector(0,0,0,0)); // need to get this from a daughter
+	}
 	
 	return 1;
 }
@@ -545,7 +565,7 @@ int TruthNeutronCaptures::ReadEntryNtuple(long entry_number){
 	(myTreeReader.GetBranchValue("potot",total_ID_pes))      &&  // "qismsk"
 	(myTreeReader.GetBranchValue("pomax",max_ID_PMT_pes))    &&  // "qimxsk", presumably max # PEs from an ID PMT?
 	
-	// TODO compare this to those from second set of primaries array
+	// numnu is 0 even when npar is >3...
 //	// neutrino interaction info - first primaries array includes neutrino and target (index 0 and 1)
 //	(myTreeReader.GetBranchValue("mode",nu_intx_mode))       &&  // see neut_mode_to_string(mode)
 //	(myTreeReader.GetBranchValue("numnu",tot_n_primaries))   &&  // both ingoing and outgoing
@@ -622,23 +642,18 @@ int TruthNeutronCaptures::CreateOutputFile(std::string filename){
 	outtree->Branch("subevent_num",&out_subevent_number);
 	
 	// primary particle
-//	outtree->Branch("primary_id",&out_primary_id);
 	outtree->Branch("primary_pdg",&out_primary_pdg);
 	outtree->Branch("primary_energy",&out_primary_energy);
 	outtree->Branch("primary_start_pos",&out_primary_start_pos);
 	outtree->Branch("primary_end_pos",&out_primary_end_pos);
 	
 	// parent nuclide - one for each neutron
-//	outtree->Branch("parent_primary_id",&out_parent_primary_id);
-//	outtree->Branch("nuclide_id",&out_nuclide_id);
 	outtree->Branch("nuclide_pdg",&out_nuclide_pdg);
 	outtree->Branch("nuclide_creation_pos",&out_nuclide_creation_pos);
 	outtree->Branch("nuclide_decay_pos",&out_nuclide_decay_pos);
 	outtree->Branch("nuclide_daughter_pdg",&out_nuclide_daughter_pdg);
 	
 	// neutron
-//	outtree->Branch("parent_nuclide_id",&out_parent_nuclide_id);
-//	outtree->Branch("neutron_id",&out_neutron_id);
 	outtree->Branch("neutron_start_pos",&out_neutron_start_pos);
 	outtree->Branch("neutron_end_pos",&out_neutron_end_pos);
 	outtree->Branch("neutron_start_energy",&out_neutron_start_energy);
@@ -647,7 +662,6 @@ int TruthNeutronCaptures::CreateOutputFile(std::string filename){
 	outtree->Branch("neutron_n_daughters",&out_neutron_ndaughters);
 	
 	// gamma
-//	outtree->Branch("parent_neutron_id",&out_parent_neutron_id);
 	outtree->Branch("gamma_energy",&out_gamma_energy);
 	outtree->Branch("gamma_time",&out_gamma_time);
 	
@@ -657,23 +671,18 @@ int TruthNeutronCaptures::CreateOutputFile(std::string filename){
 void TruthNeutronCaptures::ClearOutputTreeBranches(){
 	// clear any vector branches
 	
-//	out_primary_id.clear();
 	out_primary_pdg.clear();
 	out_primary_energy.clear();
 	out_primary_start_pos.clear();
 	out_primary_end_pos.clear();
 	
 	// parent nuclide
-//	out_parent_primary_id.clear();
-//	out_nuclide_id.clear();
 	out_nuclide_pdg.clear();
 	out_nuclide_creation_pos.clear();
 	out_nuclide_decay_pos.clear();
 	out_nuclide_daughter_pdg.clear();
 	
 	// neutrons
-//	out_parent_nuclide_id.clear();
-//	out_neutron_id.clear();
 	out_neutron_start_pos.clear();
 	out_neutron_end_pos.clear();
 	out_neutron_start_energy.clear();
@@ -682,7 +691,6 @@ void TruthNeutronCaptures::ClearOutputTreeBranches(){
 	out_neutron_ndaughters.clear();
 	
 	// gammas
-//	out_parent_neutron_id.clear();
 	out_gamma_energy.clear();
 	out_gamma_time.clear();
 	
@@ -706,20 +714,26 @@ void TruthNeutronCaptures::PrintBranches(){
 	std::cout<<"entry_number: "<<out_entry_number<<std::endl
 			 <<"subevent_number:" <<out_subevent_number<<std::endl
 			 <<"num primaries: "<<out_primary_pdg.size()<<std::endl;
+	if(out_primary_pdg.size()){
+		std::cout<<"primary vertex:"
+				 <<" ("<<out_primary_start_pos.at(0).X()
+				 <<", "<<out_primary_start_pos.at(0).Y()
+				 <<", "<<out_primary_start_pos.at(0).Z()<<")"<<std::endl;
+	}
 	
 	// print primaries
 	for(int primary_i=0; primary_i<out_primary_pdg.size(); ++primary_i){
 		std::cout<<"\tprimary ("<<primary_i<<"): "<<std::endl
 				 <<"\t\tprimary pdg: "<<out_primary_pdg.at(primary_i)<<std::endl
-				 <<"\t\tprimary energy: "<<out_primary_energy.at(primary_i)<<std::endl
-				 <<"\t\tprimary start pos:"
-				 <<" ("<<out_primary_start_pos.at(primary_i).X()
-				 <<", "<<out_primary_start_pos.at(primary_i).Y()
-				 <<", "<<out_primary_start_pos.at(primary_i).Z()<<")"<<std::endl
-				 <<"\t\tprimary end pos:"
-				 <<" ("<<out_primary_end_pos.at(primary_i).X()
-				 <<", "<<out_primary_end_pos.at(primary_i).Y()
-				 <<", "<<out_primary_end_pos.at(primary_i).Z()<<")"<<std::endl;
+				 <<"\t\tprimary energy: "<<out_primary_energy.at(primary_i)<<std::endl;
+//		std::cout<<"\t\tprimary start pos:"
+//				 <<" ("<<out_primary_start_pos.at(primary_i).X()
+//				 <<", "<<out_primary_start_pos.at(primary_i).Y()
+//				 <<", "<<out_primary_start_pos.at(primary_i).Z()<<")"<<std::endl
+//				 <<"\t\tprimary end pos:"
+//				 <<" ("<<out_primary_end_pos.at(primary_i).X()
+//				 <<", "<<out_primary_end_pos.at(primary_i).Y()
+//				 <<", "<<out_primary_end_pos.at(primary_i).Z()<<")"<<std::endl;
 	}
 	
 	int total_neutrons=0;
@@ -782,7 +796,6 @@ void TruthNeutronCaptures::PrintBranches(){
 			 <<(out_gamma_energy.size()==out_nuclide_pdg.size())<<std::endl;
 	std::cout<<"==========================================================="<<std::endl;
 }
-
 
 int TruthNeutronCaptures::WriteTree(){
 	Log(toolName+" writing TTree",v_debug,verbosity);

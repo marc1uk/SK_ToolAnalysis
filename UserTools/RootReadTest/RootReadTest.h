@@ -31,8 +31,9 @@ class RootReadTest: public Tool {
 	bool Finalise(); ///< Finalise funciton used to clean up resorces.
 	
 	private:
-	int ReadEntrySKROOT(long entry_number);
-	int ReadEntryNtuple(long entry_number);
+	int ReadEntry(long entry_number);
+	int GetBranchesNtuple();
+	int GetBranchesSKROOT();
 	int CheckEntryNtuple();
 	int CheckEntrySKROOT();
 	
@@ -41,6 +42,8 @@ class RootReadTest: public Tool {
 	std::string treeName;
 	std::string testFileType;
 	int entrynum=0;
+	int maxEvents=-1;
+	int get_ok;
 	
 	// what's annoying is that we can deduce these types at runtime from the branch title,
 	// but construction of the wrapper class needs to know them at compile time.

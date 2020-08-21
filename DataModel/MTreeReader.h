@@ -69,16 +69,17 @@ class MTreeReader {
 			std::cerr<<"No such branch "<<branchname<<std::endl;
 			return 0;
 		}
-		// check if the branch is an object - in this case please use pointers
+		// check if the branch is an array - this template specialization is only for arrays
 		if(not branch_isarray.at(branchname)){
 			std::cerr<<"Branch "<<branchname
 				 <<" is not an array; please check your datatype to GetBranchValue()"<<std::endl;
 			return 0;
 		}
-		// else for arrays, construct the basic_array wrapper around the array
-		// first need to know the array dimensions, which may vary by entry
+		// for dynamic arrays we may need to update our pointer to the stored array
+		UpdateBranchPointer(branchname);
+		// next we need to know the array dimensions, which may vary by entry
 		std::vector<size_t> branchdims = GetBranchDims(branchname);
-		// construct and return the wrapper
+		// finally construct and return the wrapper
 		ref_in = basic_array<T>(branch_value_pointers.at(branchname),branchdims);
 		return 1;
 	}
@@ -94,6 +95,8 @@ class MTreeReader {
 	int Clear();
 	void SetAutoClear(bool autoclearin);
 	int GetEntry(long entry_number);
+	long GetEntriesFast();
+	long GetEntries();
 	
 	// maps of branch properties
 	std::map<std::string,std::string> GetBranchTypes();
@@ -107,6 +110,8 @@ class MTreeReader {
 	// functions
 	int ParseBranches();
 	int ParseBranchDims(std::string branchname);
+	int UpdateBranchPointer(std::string branchname);
+	int UpdateBranchPointers();
 	
 	// variables
 	std::map<std::string,TBranch*> branch_pointers;  // branch name to TBranch*
