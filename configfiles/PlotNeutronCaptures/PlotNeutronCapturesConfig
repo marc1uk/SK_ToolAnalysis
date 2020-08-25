@@ -1,0 +1,7 @@
+# Dummy config file
+
+verbosity 1
+inputFile plotNeutronsTest.root
+outputFile makeNeutronPlots.root
+drawPlots 0
+maxEvents -1

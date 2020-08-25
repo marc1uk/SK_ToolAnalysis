@@ -92,6 +92,11 @@ int MTreeReader::ParseBranches(){
 			branch_value_pointers.emplace(branchname,objpp);
 			branch_isobject.emplace(branchname,true);
 			branch_isarray.emplace(branchname,false);
+			
+			// both classes inheriting from TObject and STL containers
+			// are flagged as TLeafElements, so need further check
+			TClass* ac = TClass::GetClass(lf->GetTypeName());
+			branch_istobject.emplace(branchname,ac->InheritsFrom("TObject"));
 		}
 		// handle basic types
 		else if(lf->GetLen()==1){
@@ -99,6 +104,7 @@ int MTreeReader::ParseBranches(){
 			branch_value_pointers.emplace(branchname,objpp);
 			branch_isobject.emplace(branchname,false);
 			branch_isarray.emplace(branchname,false);
+			branch_istobject.emplace(branchname,false);
 		}
 		// handle arrays. anything more to do here? Process type string for dims etc?
 		else {
@@ -108,6 +114,7 @@ int MTreeReader::ParseBranches(){
 			branch_value_pointers.emplace(branchname,objpp);
 			branch_isobject.emplace(branchname,false);
 			branch_isarray.emplace(branchname,true);
+			branch_istobject.emplace(branchname,false);
 		}
 	}
 	
@@ -129,7 +136,7 @@ int MTreeReader::UpdateBranchPointer(std::string branchname){
 	} else {
 		objpp=reinterpret_cast<intptr_t>(lf->GetValuePointer());
 	}
-	branch_value_pointers.emplace(branchname,objpp);
+	branch_value_pointers.at(branchname)=objpp;
 	return 1;
 }
 
@@ -268,8 +275,10 @@ std::vector<size_t> MTreeReader::GetBranchDims(std::string branchname){
 
 int MTreeReader::Clear(){
 	// loop over all branches
-	for(auto&& isobject : branch_isobject){
-		// skip if not an object
+	for(auto&& isobject : branch_istobject){
+		// skip if doesn't inherit from TObject so may not have Clear() method
+		// XXX note, maybe we should check if it has a 'clear' method (stl container)
+		// and invoke that if not? Should be safe even without doing that though.
 		if(not isobject.second) continue;
 		// get pointer to the object otherwise
 		TObject* theobject = reinterpret_cast<TObject*>(branch_value_pointers.at(isobject.first));

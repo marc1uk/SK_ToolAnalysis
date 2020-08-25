@@ -114,6 +114,7 @@ class TruthNeutronCaptures: public Tool {
 	// following are arrays of size n_outgoing_primaries
 	basic_array<unsigned char*> primary_G3_code;                // use constants::g3_to_pdg to map to pdg code
 	basic_array<float> primary_start_mom;                       // [units?] this and ipv are arrays of size npar
+	basic_array<float(*)[3]>primary_start_mom_dir;              // 
 	
 	// secondaries - first secondaries arrays...
 	int n_secondaries_1;
@@ -166,26 +167,25 @@ class TruthNeutronCaptures: public Tool {
 	// primary particle - an event can have many primary particles
 	std::vector<int> out_primary_pdg;
 	std::vector<double> out_primary_energy;                          // [MeV]
+	std::vector<TVector3> out_primary_start_mom;                     // [MeV/c] redundant with above?
 	std::vector<TLorentzVector> out_primary_start_pos;               // [cm, ns]
 	std::vector<TLorentzVector> out_primary_end_pos;                 // [cm, ns]
 	
 	// parent nuclide - potentially many per event
-	std::vector<int> out_nuclide_pdg;
-	std::vector<TLorentzVector> out_nuclide_creation_pos;            // [cm, ns]
-	std::vector<TLorentzVector> out_nuclide_decay_pos;               // [cm, ns]
+	std::vector<int> out_nuclide_parent_pdg;
 	std::vector<int> out_nuclide_daughter_pdg;
 	
 	// neutrons  - potentially many per nuclide? or just one?
-	std::vector<std::vector<TLorentzVector> > out_neutron_start_pos; // [cm, ns]
-	std::vector<std::vector<TLorentzVector> > out_neutron_end_pos;   // [cm, ns]
-	std::vector<std::vector<double> > out_neutron_start_energy;      // [MeV]
-	std::vector<std::vector<double> > out_neutron_end_energy;        // [MeV] - on capture/decay
-	std::vector<std::vector<int> > out_neutron_end_process;          // geant3 process code
-	std::vector<std::vector<int> >out_neutron_ndaughters;
+	std::vector<TLorentzVector> out_neutron_start_pos; // [cm, ns]
+	std::vector<TLorentzVector> out_neutron_end_pos;   // [cm, ns]
+	std::vector<double> out_neutron_start_energy;      // [MeV]
+	std::vector<double> out_neutron_end_energy;        // [MeV] - on capture/decay
+	std::vector<int> out_neutron_end_process;          // geant3 process code
+	std::vector<int> out_neutron_ndaughters;
 	
 	// gammas - potentially many per neutron
-	std::vector<std::vector<std::vector<double> > > out_gamma_energy; // [MeV]
-	std::vector<std::vector<std::vector<double> > > out_gamma_time;   // [ns] since?
+	std::vector<std::vector<double> > out_gamma_energy; // [MeV]
+	std::vector<std::vector<double> > out_gamma_time;   // [ns] since?
 	
 	// detector information
 	// total charge? time distribution of hits?

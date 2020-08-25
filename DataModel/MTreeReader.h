@@ -31,6 +31,9 @@ class MTreeReader {
 	int GetBranchValue(std::string branchname, const T* &pointer_in){
 		if(branch_value_pointers.count(branchname)==0){
 			std::cerr<<"No such branch "<<branchname<<std::endl;
+			std::cerr<<"known branches: {";
+			for(auto&& abranch : branch_value_pointers) std::cout<<abranch.first<<", ";
+			std::cerr<<"\b\b}"<<std::endl;
 			return 0;
 		}
 		pointer_in = reinterpret_cast<const T*>(branch_value_pointers.at(branchname));
@@ -115,6 +118,7 @@ class MTreeReader {
 	
 	// variables
 	std::map<std::string,TBranch*> branch_pointers;  // branch name to TBranch*
+	std::map<std::string,bool> branch_istobject;     // branch inherits from TObject so has Clear method
 	std::map<std::string,TLeaf*> leaf_pointers;      // branch name to TLeaf*
 	std::map<std::string,std::string> branch_titles; // branch name to title (including type string)
 	std::map<std::string,intptr_t> branch_value_pointers; // branch name to pointer to value, cast to intptr_t
@@ -135,6 +139,40 @@ class MTreeReader {
 	bool autoclear=true;  // call 'Clear' method on all object branches before GetEntry
 	int verbosity=1; // TODO add to constructor
 };
+
+/*
+// mechanism to check if a given type has a Clear() method.
+// ROOT seems to flag both objects and stl containers as inheriting from TObject
+// with InheritsFrom("TLeafElement")
+// from https://stackoverflow.com/a/29772824
+template<typename T>
+struct has_clear {
+	// NOTE: sig_matches() must come before fn_exists() as it is used for its type.
+	// Also, no function bodies are needed as they are never called.
+	
+	// This matching sig results in a return type of true_type
+	template<typename Q>
+	static auto sig_matches(void(Q::*)()) -> std::true_type;
+	
+	// If the member function Q::Clear exists and a sig_matches() function
+	// exists with the required sig, then the return type is the return type of
+	// sig_matches(), otherwise this function can't exist because at least one
+	// the types don't exist so match against fn_exists(...).
+	template <typename Q>
+	static auto fn_exists(std::nullptr_t) -> decltype(sig_matches<Q>(&Q::Clear));
+	
+	// Member function either doesn't exist or doesn't match against a 
+	// sig_matches() function.
+	template<typename Q>
+	static auto fn_exists(...) -> std::false_type;
+	
+	// Intermediate storage of type for clarity
+	typedef decltype(fn_exists<T>(nullptr)) type;
+	
+	// Storing the resulting value
+	static int const value = type::value;
+};
+*/
 
 
 #endif // defined MTreeReader_H

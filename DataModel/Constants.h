@@ -1,4 +1,4 @@
-/* vim:set noexpandtab tabstop=4 wrap */
+/* vim:set noexpandtab tabstop=4 wrap filetype=cpp */
 #ifndef Constants_h
 #define Constants_h
 
@@ -45,6 +45,7 @@ namespace constants{
 		{30, "Below tracking threshold"}
 	};
 	
+	// from skdetsim source file 'gt2pd.h'
 	static const std::map<int,std::string> g3_particle_code_to_string{
 		{1,"Gamma"},
 		{2,"Positron"},
@@ -78,12 +79,25 @@ namespace constants{
 		{30,"Antixi 0"},
 		{31,"Antixi +"},
 		{32,"Antiomega +"},
+		{33,"Tau +"},
+		{34,"Tau -"},
+		{35,"D +"},
+		{36,"D -"},
+		{37,"D 0"},
+		{38,"AntiD 0"},
+		{39,"Ds +"},
+		{40,"Anti Ds -"},
+		{41,"Lambda c +"},
+		{42,"W +"},
+		{43,"W -"},
+		{44,"Z 0"},
 		{45,"Deuteron"},
-		{46,"Triton"},
+		{46,"Tritium"},
 		{47,"Alpha"},
 		{48,"Geantino"},
 		{49,"He3"},
-		{50,"Cerenkov"}
+		{50,"Cerenkov"},
+		{69,"O16"}
 	};
 	
 	static const std::map<std::string,int> string_to_g3_particle_code{
@@ -119,12 +133,25 @@ namespace constants{
 		{"Antixi 0",30},
 		{"Antixi +",31},
 		{"Antiomega +",32},
+		{"Tau +",33},
+		{"Tau -",34},
+		{"D +",35},
+		{"D -",36},
+		{"D 0",37},
+		{"AntiD 0",38},
+		{"Ds +",39},
+		{"Anti Ds -",40},
+		{"Lambda c +",41},
+		{"W +",42},
+		{"W -",43},
+		{"Z 0",44},
 		{"Deuteron",45},
-		{"Triton",46},
+		{"Tritium",46},
 		{"Alpha",47},
 		{"Geantino",48},
 		{"He3",49},
-		{"Cerenkov",50}
+		{"Cerenkov",50},
+		{"O16",69}
 	};
 	
 	static const std::map<int,int> g3_particle_code_to_pdg{
@@ -147,9 +174,9 @@ namespace constants{
 		{8,211},       // pi+
 		{32,-3334},    // Omega+ (PB)
 		{9,-211},      // pi-
-		{33,-15},      // tau+
 		{10,130},      // K long
-		{34,15},       // tau-
+		{33,-15},      // tau+     << these are switched in gt2pd.h
+		{34,15},       // tau-     << ROOT says 33=15, 34=-15
 		{11,321},      // K+
 		{35,411},      // D+
 		{12,-321},     // K-
@@ -171,13 +198,24 @@ namespace constants{
 		{20,3212},     // Sigma0
 		{44,23},       // Z
 		{21,3112},     // Sigma-
-		{45,3329},        // deuteron
 		{22,3322},     // Xi0
-		{46,0},        // triton
 		{23,3312},     // Xi-
-		{47,0},        // alpha
 		{24,3334},     // Omega- (PB)
-		{48,0}         // Geantino
+		// XXX The following are from skdetsim gt2pd.h, but are NOT legitimate PDG codes! XXX
+		{45,100045},   // deuteron
+		{46,100046},   // triton
+		{47,100047},   // alpha
+		{48,100048},   // Geantino
+		{49,100049},   // He3
+		{69,100069}    // 16O nucleus
+//		// the legitimate codes for the above  - since this is a map we cannot store both...!
+//		{45,1000010020},  // deuteron
+//		{46,1000010030},  // triton
+//		{47,1000020040},  // alpha
+//		{48,0},           // Geantino - no PDG code
+//		{49,1000020030},  // He3
+//		{69,1000080160}   // 16O
+//		// XXX what are the g3 codes for gadolinium nuclei???
 	};
 	
 	static const std::map<int,int> pdg_to_g3_particle_code{
@@ -224,13 +262,23 @@ namespace constants{
 		{3212,20},     // Sigma0
 		{23,44},       // Z
 		{3112,21},     // Sigma-
-		{3329,45},        // deuteron
 		{3322,22},     // Xi0
-		{0,46},        // triton
 		{3312,23},     // Xi-
-		{0,47},        // alpha
 		{3334,24},     // Omega- (PB)
-		{0,48}         // Geantino
+		// XXX The following are from skdetsim gt2pd.h, but are NOT legitimate PDG codes! XXX
+		{100045,45},   // deuteron - real PDG code is '1000010020'
+		{100046,46},   // triton
+		{100047,47},   // alpha
+		{100048,48},   // Geantino
+		{100049,49},   // He3
+		{100069,69},   // 16O
+		// the legitimate codes for the above
+		{1000010020,45},  // deuteron
+		{1000010030,46},  // triton
+		{1000020040,47},  // alpha
+		//{0,48},         // Geantino - no PDG code
+		{1000020030,49},  // He3
+		{1000080160,69}   // 16O
 	};
 	
 	static const std::map<int,std::string> numnu_code_to_string{
@@ -261,7 +309,7 @@ namespace constants{
 	};
 	
 	static const std::map<int,std::string> pdg_to_string{
-		// FIXME many of these are probably WRONG, update from TParticlePDG
+		// FIXME use TParticlePDG for greater coverage, but need to add nuclei
 		{2212,"Proton"},
 		{-2212,"Anti Proton"},
 		{11,"Electron"},
@@ -301,36 +349,30 @@ namespace constants{
 		{-15,"Tau+"},
 		{15,"Tau-"},
 		{100,"OpticalPhoton"},
-		{3328,"Alpha"},
-		{3329,"Deuteron"},
-		{3330,"Triton"},
-		{3351,"Li7"},
-		{3331,"C10"},
-		{3345,"B11"},
-		{3332,"C12"},
-		{3350,"C13"},
-		{3349,"N13"},
-		{3340,"N14"},
-		{3333,"N15"},
-		{3334,"N16"},
-		{3335,"O16"},
-		{3346,"Al27"},
-		{3341,"Fe54"},
-		{3348,"Mn54"},
-		{3342,"Mn55"},
-		{3352,"Mn56"},
-		{3343,"Fe56"},
-		{3344,"Fe57"},
-		{3347,"Fe58"},
-		{3353,"Eu154"},
-		{3336,"Gd158"},
-		{3337,"Gd156"},
-		{3338,"Gd157"},
-		{3339,"Gd155"}
+		// nuclei
+		{1000010020,"Deuterium"},
+		{1000010030,"Tritium"},
+		{1000020040,"Alpha"},
+		{1000020030,"He3"},
+		{1000080160,"O16"},
+		{1000641550,"Gd155"},     // ground state
+		{1000641550,"Gd155*"},    // excited 121.050 state
+		{1000641560,"Gd156"},     // ground state
+		{1000641561,"Gd156*"},    // excited 2137.600 state
+		{1000641570,"Gd157"},     // ground state
+		{1000641571,"Gd157*"},    // excited 426.600 state
+		{1000641580,"Gd158"},     // ground state
+		// support skdetsim "custom" pdg codes
+		{100045,"Deuterium"},
+		{100046,"Tritium"},
+		{100047,"Alpha"},
+		{100048,"Geantino"},
+		{100049,"He3"},
+		{100069,"O16"}
 	};
 	
 	static const std::map<std::string,int> string_to_pdg{
-	// FIXME many of these are probably WRONG, update from TParticlePDG
+		// FIXME use TParticlePDG for greater coverage, but need to add nuclei
 		{"Proton",2212},
 		{"Anti Proton",-2212},
 		{"Electron",11},
@@ -370,35 +412,36 @@ namespace constants{
 		{"Tau+",-15},
 		{"Tau-",15},
 		{"OpticalPhoton",100},
-		{"Alpha",3328},
-		{"Deuteron",3329},    // from WChSandbox ... is this custom?
-		{"Deuterium",100045}, // according to sonia...
-		{"Triton",3330},
-		{"Li7",3351},
-		{"C10",3331},
-		{"B11",3345},
-		{"C12",3332},
-		{"C13",3350},
-		{"N13",3349},
-		{"N14",3340},
-		{"N15",3333},
-		{"N16",3334},
-		{"O16",3335},
-		{"Al27",3346},
-		{"Fe54",3341},
-		{"Mn54",3348},
-		{"Mn55",3342},
-		{"Mn56",3352},
-		{"Fe56",3343},
-		{"Fe57",3344},
-		{"Fe58",3347},
-		{"Eu154",3353},
-		{"Gd158",3336},
-		{"Gd156",3337},
-		{"Gd157",3338},
-		{"Gd155",3339}
+		// nuclei
+		{"Deuterium",1000010020},
+		{"Tritium",1000010030},
+		{"Alpha",1000020040},
+		{"He3",1000020030},
+		{"O16",1000080160},
+		{"Gd155",1000641550},     // ground state
+		{"Gd155*",1000641550},    // excited 121.050 state
+		{"Gd156",1000641560},     // ground state
+		{"Gd156*",1000641561},    // excited 2137.600 state
+		{"Gd157",1000641570},     // ground state
+		{"Gd157*",1000641571},    // excited 426.600 state
+		{"Gd158",1000641580}      // ground state
 	};
 	
+	// TODO TParticleTable allows a 'DecayList' of daughter nuclides
+	// could we use this to connect skdetsim daughter nuclei to their parent?
+	// we will probably need to build this decay list ourselves though.
 }
+
+// from the PDG on Monte Carlo Codes:
+/*
+14. Nuclear codes are given as 10-digit numbers ±10LZZZAAAI.
+For a nucleus consisting of np protons, nn neutrons and
+nΛ Λ’s, A = np+nn+nΛ gives the total baryon number, Z = np
+the total charge and L = nΛ the total number of strange quarks.
+I gives the isomer level, with I = 0 corresponding to the ground
+state and I > 0 to excitations, see[8], where states denoted
+m,n,p,q translate to I = 1 − 4. As examples, the deuteron
+is 1000010020 and 235U is 1000922350.
+*/
 
 #endif // define Constants_h

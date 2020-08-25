@@ -12,7 +12,8 @@
 class TApplication;
 class TFile;
 class TTree;
-class TVector3;
+#include "TVector3.h"
+#include "TH1.h"
 class TLorentzVector;
 
 /**
@@ -37,7 +38,9 @@ class PlotNeutronCaptures: public Tool {
 	// =========
 	int ReadEntry(long entry_number);
 	int GetBranches();
-	int FillHistos();
+	int MakeHistos();
+	int FillFriend();
+	void ClearOutputTreeBranches();
 	
 	// tool variables
 	// ==============
@@ -46,9 +49,10 @@ class PlotNeutronCaptures: public Tool {
 	TApplication* rootTApp;
 	std::string inputFile;
 	std::string outputFile; // or just add to the input file?
-	int maxEvents;
+	int maxEvents=-1;
 	
-	int entrynum;
+	int entrynum=0;
+	std::map<std::string,int> capture_nuclide_vs_count;
 	
 	// verbosity levels: if 'verbosity' < this level, the message type will be logged.
 	int verbosity=1;
@@ -59,9 +63,23 @@ class PlotNeutronCaptures: public Tool {
 	std::string logmessage="";
 	int get_ok=0;
 	
+	// variables to write out
+	// ======================
+	TFile* outfile=nullptr;
+	TTree* friendTree=nullptr;
+	TVector3 neutrino_momentum;
+	TVector3 muon_momentum;
+	std::vector<double> neutron_longitudinal_travel;     // relative to neutrino dir
+	std::vector<double> neutron_perpendicular_travel;    // relative to neutrino dir
+	std::vector<double> total_gamma_energy;
+	
+	TVector3* neutrino_momentump=&neutrino_momentum;     // as far as i can tell we ought not to need these
+	TVector3* muon_momentump=&muon_momentum;             // but TTree::Branch("name",TVector3* obj) segfaults???
+	
 	// variables to read in
 	// ====================
 	MTreeReader myTreeReader; // the TTree reader
+	TTree* intree=nullptr;
 	
 	// file-wise
 	std::string filename;
@@ -72,28 +90,29 @@ class PlotNeutronCaptures: public Tool {
 	int subevent_number;  // 
 	
 	// primary particle - an event can have many primary particles
-	std::vector<int> primary_pdg;                                 // 
-	std::vector<double> primary_energy;                           // [MeV]
-	std::vector<TLorentzVector> primary_start_pos;                // [cm, ns]
-	std::vector<TLorentzVector> primary_end_pos;                  // [cm, ns]
+	const std::vector<int>* primary_pdg=nullptr;                                 // 
+	const std::vector<double>* primary_energy=nullptr;                           // [MeV]
+	const std::vector<TLorentzVector>* primary_start_pos=nullptr;                // [cm, ns]
+	const std::vector<TLorentzVector>* primary_end_pos=nullptr;                  // [cm, ns]
+	const std::vector<TVector3>* primary_start_mom=nullptr;                      // [MeV/c]
 	
 	// parent nuclide - potentially many per event
-	std::vector<int> nuclide_pdg;
-	std::vector<TLorentzVector> nuclide_creation_pos;              // [cm, ns]
-	std::vector<TLorentzVector> nuclide_decay_pos;                 // [cm, ns]
-	std::vector<int> nuclide_daughter_pdg;                         // 
+	const std::vector<int>* nuclide_pdg=nullptr;
+	const std::vector<TLorentzVector>* nuclide_creation_pos=nullptr;              // [cm, ns]
+	const std::vector<TLorentzVector>* nuclide_decay_pos=nullptr;                 // [cm, ns]
+	const std::vector<int>* nuclide_daughter_pdg=nullptr;                         // 
 	
 	// neutrons  - potentially many per nuclide? or just one?
-	std::vector<std::vector<TLorentzVector> > neutron_start_pos;   // [cm, ns]
-	std::vector<std::vector<TLorentzVector> > neutron_end_pos;     // [cm, ns]
-	std::vector<std::vector<double> > neutron_start_energy;        // [MeV]
-	std::vector<std::vector<double> > neutron_end_energy;          // [MeV] - on capture/decay
-	std::vector<std::vector<int> > neutron_end_process;            // geant3 process code
-	std::vector<std::vector<int> >neutron_ndaughters;              // num gammas
+	const std::vector<TLorentzVector>* neutron_start_pos=nullptr;   // [cm, ns]
+	const std::vector<TLorentzVector>* neutron_end_pos=nullptr;     // [cm, ns]
+	const std::vector<double>* neutron_start_energy=nullptr;        // [MeV]
+	const std::vector<double>* neutron_end_energy=nullptr;          // [MeV] - on capture/decay
+	const std::vector<int>* neutron_end_process=nullptr;            // geant3 process code
+	const std::vector<int>* neutron_ndaughters=nullptr;              // num gammas
 	
 	// gammas - potentially many per neutron
-	std::vector<std::vector<std::vector<double> > > gamma_energy;  // [MeV]
-	std::vector<std::vector<std::vector<double> > > gamma_time;    // [ns]
+	const std::vector<std::vector<double> >* gamma_energy=nullptr;  // [MeV]
+	const std::vector<std::vector<double> >* gamma_time=nullptr;    // [ns]
 	
 	// detector information
 	// total charge? time distribution of hits?
