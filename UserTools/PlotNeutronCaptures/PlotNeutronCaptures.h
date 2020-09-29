@@ -41,6 +41,7 @@ class PlotNeutronCaptures: public Tool {
 	int MakeHistos();
 	int FillFriend();
 	void ClearOutputTreeBranches();
+	int WriteTree();
 	
 	// tool variables
 	// ==============
@@ -50,6 +51,7 @@ class PlotNeutronCaptures: public Tool {
 	std::string inputFile;
 	std::string outputFile; // or just add to the input file?
 	int maxEvents=-1;
+	int WRITE_FREQUENCY;
 	
 	int entrynum=0;
 	std::map<std::string,int> capture_nuclide_vs_count;
@@ -84,6 +86,8 @@ class PlotNeutronCaptures: public Tool {
 	// file-wise
 	std::string filename;
 	float water_transparency;
+	int skdetsim_version;
+	int tba_table_version;
 	
 	// event-wise
 	int entry_number;     // TTree entry number to be able to identify the source event

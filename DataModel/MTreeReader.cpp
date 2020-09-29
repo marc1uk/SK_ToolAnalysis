@@ -17,6 +17,7 @@
 #include <iostream>
 #include <vector>
 #include <sstream>
+#include <algorithm> // find
 
 // TODO constructor/loader for tchains or tree pointers
 MTreeReader::MTreeReader(std::string filename, std::string treename){
@@ -79,7 +80,8 @@ int MTreeReader::ParseBranches(){
 		branch_types.emplace(branchname,lf->GetTypeName());
 		// the branch title includes dimensionality for c-style arrays
 		// e.g. "mybranchname     int[nparts][3]/F"
-		branch_titles.emplace(branchname,lf->GetBranch()->GetTitle());
+		std::string branchtitle=lf->GetBranch()->GetTitle();
+		branch_titles.emplace(branchname,branchtitle);
 		
 		// handle object pointers
 		if (lf->IsA() == TLeafElement::Class()) {
@@ -98,22 +100,22 @@ int MTreeReader::ParseBranches(){
 			TClass* ac = TClass::GetClass(lf->GetTypeName());
 			branch_istobject.emplace(branchname,ac->InheritsFrom("TObject"));
 		}
-		// handle basic types
-		else if(lf->GetLen()==1){
-			intptr_t objpp=reinterpret_cast<intptr_t>(lf->GetValuePointer());
-			branch_value_pointers.emplace(branchname,objpp);
-			branch_isobject.emplace(branchname,false);
-			branch_isarray.emplace(branchname,false);
-			branch_istobject.emplace(branchname,false);
-		}
-		// handle arrays. anything more to do here? Process type string for dims etc?
-		else {
-			// leaf->GetLen(); will return the 1D flattened array size
+		// handle arrays
+		//else if(lf->GetLen()>1){  // flattened length. Unsuitable when dynamic size happens to be 1!
+		else if(branchtitle.find_first_of("[",0)!=std::string::npos){  // hope for no '[' in branch names
 			// we'll need to parse the title to retrieve the actual dimensions
 			intptr_t objpp=reinterpret_cast<intptr_t>(lf->GetValuePointer());
 			branch_value_pointers.emplace(branchname,objpp);
 			branch_isobject.emplace(branchname,false);
 			branch_isarray.emplace(branchname,true);
+			branch_istobject.emplace(branchname,false);
+		}
+		// handle basic types
+		else {
+			intptr_t objpp=reinterpret_cast<intptr_t>(lf->GetValuePointer());
+			branch_value_pointers.emplace(branchname,objpp);
+			branch_isobject.emplace(branchname,false);
+			branch_isarray.emplace(branchname,false);
 			branch_istobject.emplace(branchname,false);
 		}
 	}
@@ -364,5 +366,63 @@ std::string MTreeReader::GetBranchType(std::string branchname){
 		return "";
 	}
 	return ""; // dummy to silence warning
+}
+
+int MTreeReader::DisableBranches(std::vector<std::string> branchnames){
+	int success=1;
+	// disable branches by name
+	for(auto&& branchname : branchnames){
+		if(branch_pointers.count(branchname)){
+			branch_pointers.at(branchname)->SetStatus(0);
+		} else {
+			std::cerr<<"No such branch "<<branchname<<std::endl;
+			success=0;
+		}
+	}
+	return success;
+}
+
+int MTreeReader::EnableBranches(std::vector<std::string> branchnames){
+	int success=1;
+	// disable branches by name
+	for(auto&& branchname : branchnames){
+		if(branch_pointers.count(branchname)){
+			branch_pointers.at(branchname)->SetStatus(1);
+		} else {
+			std::cerr<<"No such branch "<<branchname<<std::endl;
+			success=0;
+		}
+	}
+	return success;
+}
+
+int MTreeReader::OnlyDisableBranches(std::vector<std::string> branchnames){
+	// enable all branches except those named
+	int num_named_branches=branchnames.size();
+	for(auto&& abranch : branch_pointers){
+		if(std::find(branchnames.begin(),branchnames.end(),abranch.first)!=branchnames.end()){
+			abranch.second->SetStatus(0);
+			--num_named_branches;
+		} else {
+			abranch.second->SetStatus(1);
+		}
+	}
+	// return whether we found all branches in the list given
+	return (num_named_branches==0);
+}
+
+int MTreeReader::OnlyEnableBranches(std::vector<std::string> branchnames){
+	// disable all branches except those named
+	int num_named_branches=branchnames.size();
+	for(auto&& abranch : branch_pointers){
+		if(std::find(branchnames.begin(),branchnames.end(),abranch.first)!=branchnames.end()){
+			abranch.second->SetStatus(1);
+			--num_named_branches;
+		} else {
+			abranch.second->SetStatus(0);
+		}
+	}
+	// return whether we found all branches in the list given
+	return (num_named_branches==0);
 }
 

@@ -74,6 +74,7 @@ class TruthNeutronCaptures: public Tool {
 	void PrintBranches();
 	int WriteTree();
 	void CloseFile();
+	int DisableUnusedBranches();
 	
 	// Member variables
 	// ================
@@ -154,12 +155,12 @@ class TruthNeutronCaptures: public Tool {
 	
 	// file-wise
 	std::string out_filename;
-//	int out_skdetsim_version;
-//	int out_tba_table_version;
+	int out_skdetsim_version;
+	int out_tba_table_version;
 	float out_water_transparency;
 	
 	// event-wise
-//	int out_run_number;
+	int out_run_number;
 //	int out_subrun_number;
 	int out_entry_number;   // TTree entry number to be able to identify the source event
 	int out_subevent_number;

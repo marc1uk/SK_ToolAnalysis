@@ -52,7 +52,7 @@ class MTreeReader {
 		// check if the branch is a primitive
 		if(branch_isobject.at(branchname)||branch_isarray.at(branchname)){
 			std::cerr<<"Branch "<<branchname
-				 <<" is not a primitive; please pass a suitable pointer"
+				 <<" is not a primitive; please pass a suitable const pointer"
 				 <<" or basic_array to GetBranchValue()"<<std::endl;
 			// TODO copy-construct an object, if they really want
 			// requires a suitable copy constructor (or operator=) exists for the class
@@ -100,6 +100,10 @@ class MTreeReader {
 	int GetEntry(long entry_number);
 	long GetEntriesFast();
 	long GetEntries();
+	int DisableBranches(std::vector<std::string> branchnames);
+	int EnableBranches(std::vector<std::string> branchnames);
+	int OnlyEnableBranches(std::vector<std::string> branchnames);
+	int OnlyDisableBranches(std::vector<std::string> branchnames);
 	
 	// maps of branch properties
 	std::map<std::string,std::string> GetBranchTypes();

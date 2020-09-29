@@ -1,7 +1,13 @@
-# Dummy config file
+# vim: filetype=Makefile #
 
 verbosity 1
-inputFile plotNeutronsTest.root
-outputFile makeNeutronPlots.root
+#inputFile plotNeutronsTest.root
+#outputFile makeNeutronPlots.root
+#inputFile skgdNeutronsTest.root
+#outputFile skgdNeutronsPlot.root
+inputFile /HOME/LinuxSystemFiles/SK/skdetsim/skdetsim_elhedri/truthneutrons.root
+outputFile /HOME/LinuxSystemFiles/SK/skdetsim/skdetsim_elhedri/plotneutrons.root
+
 drawPlots 0
 maxEvents -1
+writeFrequency 10

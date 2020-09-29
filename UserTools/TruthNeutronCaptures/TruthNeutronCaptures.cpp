@@ -48,6 +48,7 @@ bool TruthNeutronCaptures::Initialise(std::string configfile, DataModel &data){
 	// open the input TFile and TTree
 	// ------------------------------
 	get_ok = myTreeReader.Load(inputFile, "h1"); // official ntuple TTree is descriptively known as 'h1'
+	DisableUnusedBranches();
 	if(get_ok) ReadEntryNtuple(0);
 	
 	// create the output TFile and TTree
@@ -66,7 +67,7 @@ bool TruthNeutronCaptures::Execute(){
 	ClearOutputTreeBranches();
 	
 	// Copy over directly transferred variables
-	Log(toolName+" copying output vectors",v_debug,verbosity);
+	Log(toolName+" copying output variables",v_debug,verbosity);
 	CopyVariables();
 	
 	// Calculate derived variables
@@ -77,7 +78,7 @@ bool TruthNeutronCaptures::Execute(){
 	if(verbosity>1) PrintBranches();
 	
 	// Fill the output tree
-	Log(toolName+"filling output TTree entry",v_debug,verbosity);
+	Log(toolName+" filling output TTree entry",v_debug,verbosity);
 	outtree->Fill();
 	
 	// update the output file so we don't lose everything if we crash
@@ -132,12 +133,12 @@ void TruthNeutronCaptures::CopyVariables(){
 	// those we want to keep in the output tree without modification
 	
 	out_filename = myTreeReader.GetTree()->GetCurrentFile()->GetName();
-//	out_skdetsim_version =    ??
-//	out_tba_table_version =   ??
+	out_skdetsim_version =  -1;
+	out_tba_table_version = -1;
 	out_water_transparency = water_transparency;
 	
 	// event level
-//	out_run_number = run_number;
+	out_run_number = run_number;
 //	out_subrun_number = subrun_number;
 //	out_event_number = event_number;
 	out_entry_number = entry_number;
@@ -398,8 +399,7 @@ int TruthNeutronCaptures::CalculateVariables(){
 		// ------------------------
 		// Scan for Daughter Nuclei
 		// ------------------------
-		else if((secondary_gen_process.at(secondary_i)==18)&&
-				(secondary_PDG_code_2.at(secondary_i)!=neutron_pdg)){
+		else if(secondary_gen_process.at(secondary_i)==18){
 			// if it's not a neutron but came from neutron capture it's the daughter nuclide
 			// its parent will also be the captured neutron, same as the decay gamma.
 			int neutron_parent_loc=-1;
@@ -435,11 +435,12 @@ int TruthNeutronCaptures::CalculateVariables(){
 				// Convert from secondary index (i.e. position in array of all secondaries)
 				// into neutron index (i.e. position in our array of neutrons)
 				if(out_nuclide_daughter_pdg.at(neutron_parent_loc)>0){
-					Log(toolName+" WARNING, FOUND SECOND DAUGHTER NUCLIDE FROM NEUTRON CAPTURE."
+					Log(toolName+" ERROR, FOUND SECOND DAUGHTER NUCLIDE FROM NEUTRON CAPTURE."
 						+" FIRST DAUGHTER PDG: "+toString(out_nuclide_daughter_pdg.at(neutron_parent_loc))
 						+" ("+PdgToString(out_nuclide_daughter_pdg.at(neutron_parent_loc))+") "
 						+" SECOND DAUGHTER PDG: "+toString(secondary_PDG_code_2.at(secondary_i))
-						+" ("+PdgToString(secondary_PDG_code_2.at(secondary_i))+")",v_warning,verbosity);
+						+" ("+PdgToString(secondary_PDG_code_2.at(secondary_i))+")",v_error,verbosity);
+					assert(false);
 					continue;
 				}
 				out_nuclide_daughter_pdg.at(neutron_parent_loc) = secondary_PDG_code_2.at(secondary_i);
@@ -544,7 +545,59 @@ int TruthNeutronCaptures::ReadEntryNtuple(long entry_number){
 	// NOTE this is carried over to daughters of secondaries, so only use as parent if iprntidx==0
 //	(myTreeReader.GetBranchValue("iorgprt",parent_track_pid_code))     &&  // i'm so confused
 	
+	// XXX for efficiency, add all used branches to DisableUnusedBranches XXX
+	
 	return success;
+}
+
+int TruthNeutronCaptures::DisableUnusedBranches(){
+	std::vector<std::string> used_branches{
+		"wlen",
+		"nrun",
+		"nsub",
+		"nev",
+		"nsube",
+//		"date",
+//		"time",
+		"nhit",
+		"potot",
+		"pomax",
+//		"mode",
+//		"numnu",
+//		"ipnu",
+//		"pnu",
+		"posv",
+//		"wallv",
+		"npar",
+		"ipv",
+		"dirv",
+		"pmomv",
+//		"npar2",
+//		"ipv2",
+//		"posv2",
+//		"wallv2",
+//		"pmomv2",
+//		"iorg",
+		"nscndprt",
+		"iprtscnd",
+		"vtxscnd",
+		"tscnd",
+		"pscnd",
+		"lmecscnd",
+		"nchilds",
+		"iprntidx",
+//		"ichildidx",
+//		"iprntprt",
+		"pprnt",
+		"vtxprnt",
+		"pprntinit",
+//		"itrkscnd",
+		"istakscnd",
+		"iprnttrk"  //,
+//		"iorgprt",
+	};
+	
+	return myTreeReader.OnlyEnableBranches(used_branches);
 }
 
 int TruthNeutronCaptures::CreateOutputFile(std::string filename){
@@ -557,12 +610,12 @@ int TruthNeutronCaptures::CreateOutputFile(std::string filename){
 	// ---------------
 	// file level
 	outtree->Branch("filename",&out_filename);
-//	outtree->Branch("skdetsim_version",&out_skdetsim_version);    // where?
-//	outtree->Branch("tba_table_version",&out_tba_table_version);  // where?
+	outtree->Branch("skdetsim_version",&out_skdetsim_version);    // where?
+	outtree->Branch("tba_table_version",&out_tba_table_version);  // where?
 	outtree->Branch("water_transparency",&out_water_transparency);
 	
 	// event level
-//	outtree->Branch("run_number",&out_run_number);
+	outtree->Branch("run_number",&out_run_number);
 //	outtree->Branch("subrun_number",&out_subrun_number);
 	outtree->Branch("entry_number",&out_entry_number);
 	outtree->Branch("subevent_num",&out_subevent_number);
@@ -586,9 +639,12 @@ int TruthNeutronCaptures::CreateOutputFile(std::string filename){
 	outtree->Branch("neutron_end_process",&out_neutron_end_process,32000,0);
 	outtree->Branch("neutron_n_daughters",&out_neutron_ndaughters,32000,0);
 	
+	
 	// gamma
 	outtree->Branch("gamma_energy",&out_gamma_energy,32000,0);
 	outtree->Branch("gamma_time",&out_gamma_time,32000,0);
+	// use outtree->Draw("Length$(gamma_energy[])"); to draw gamma multiplicity (equivalent to neutron_n_daughters)
+	// use outtree->Draw("Sum$(gamma_energy[])");    to draw total gamma energy from a capture
 	
 	return 1;
 }
@@ -721,8 +777,15 @@ int TruthNeutronCaptures::WriteTree(){
 
 void TruthNeutronCaptures::CloseFile(){
 	outtree->ResetBranchAddresses();
-	outtree->SetAlias("n_travel_dist","sqrt(pow(neutron_start_pos.X()-neutron_end_pos.X(),2)+pow(neutron_start_pos.Y()-neutron_end_pos.Y(),2)+pow(neutron_start_pos.Z()-neutron_end_pos.Z(),2))");
-	outtree->SetAlias("n_travel_time","neutron_end_pos.T()-neutron_start_pos.T()");
+	// XXX note that while these do persist in the tree:
+	// 1. they can't be used in a loop, since you can't use SetBranchAddress on an Alias.
+	//    this is probably less of a concern as they can easily be calculated within a loop.
+	// 2. they will not show up in TTree::Print(), so you need to know they're there...!
+	// Would it be better to store the redundant information? Is there a better way?
+	outtree->SetAlias("neutron_travel_dist","sqrt(pow(neutron_start_pos.X()-neutron_end_pos.X(),2)+pow(neutron_start_pos.Y()-neutron_end_pos.Y(),2)+pow(neutron_start_pos.Z()-neutron_end_pos.Z(),2))");
+	outtree->SetAlias("neutron_travel_time","neutron_end_pos.T()-neutron_start_pos.T()");
+	outtree->SetAlias("neutron_n_daughters","Length$(gamma_energy[])");
+	outtree->SetAlias("neutron_tot_gammaE","Sum$(gamma_energy[])");
 	outfile->Write("*",TObject::kOverwrite);
 	outfile->Close();
 	delete outfile;

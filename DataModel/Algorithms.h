@@ -44,6 +44,13 @@ std::string toString(const T a_value, const int n = 2){
 }
 
 template <typename T>
+std::string toString(T* a_ptr){
+	std::stringstream out;
+	out<<a_ptr;
+	return out.str();
+}
+
+template <typename T>
 bool solveQuadratic(const T &a, const T &b, const T &c, T &x0, T &x1){
 	T discr = b*b - 4*a*c;
 	if(discr < 0){ return false; }

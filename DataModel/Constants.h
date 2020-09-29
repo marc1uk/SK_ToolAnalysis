@@ -30,7 +30,8 @@ namespace constants{
 	// https://root.cern/doc/v608/classTDatabasePDG.html
 	
 	static const std::map<int,std::string> G3_process_code_to_string{
-		// TODO fill in the missing gaps?
+		// full list from Geant3 manual page 445
+		// see p420+ for a full list of Geant3 common blocks and their parameters
 		{5, "Decay"},
 		{6, "Pair production"},
 		{7, "Compton Scatter"},
@@ -43,6 +44,49 @@ namespace constants{
 		{21, "Muon-Nuclear Interaction"},
 		{23, "Photonuclear"},
 		{30, "Below tracking threshold"}
+
+/*
+NEXT, 1, particle has reached the boundary of current volume
+MULS, 2, multiple scattering
+LOSS, 3, continuous energy loss
+FIEL, 4, bending in magnetic feld
+DCAY, 5, particle decay
+PAIR, 6, photon pair-production or muon direct pair production
+COMP, 7, Compton scattering
+PHOT, 8, photoelectric effect
+BREM, 9, bremsstrahlung
+DRAY, 10, δ-ray production
+ANNI, 11, positron annihilation
+HADR, 12, hadronic interaction
+ECOH, 13, hadronic elastic coherent scattering
+EVAP, 14, nuclear evaporation
+FISS, 15, nuclear fssion
+ABSO, 16, nuclear absorption
+ANNH, 17, anti-proton annihilation
+CAPT, 18, neutron capture
+EINC, 19, hadronic elastic incoherent scattering
+INHE, 20, hadronic inelastic scattering
+MUNU, 21, muon-nuclear interaction
+TOFM, 22, exceeded time of fight cut
+PFIS, 23, nuclear photo-fssion
+SCUT, 24, the particle was unexpectedly crossing volume boundaries due to bending in a magnetic feld and the step has been halved to avoid this
+RAYL, 25, Rayleigh effect
+PARA, 26, parametrisation activated
+PRED, 27, error matrix computed (GEANE tracking)
+LOOP, 28, not used
+NULL, 29, no mechanism is active, usually at the entrance of a new volume
+STOP, 30, particle has fallen below energy threshold and tracking stops
+LABS, 101, Cerenkov photon absorption
+LREF, 102, Cerenkov photon refection/refraction
+SMAX, 103, step limited by STEMAX
+SCOR, 104, correction against loss of precision in boundary crossing
+CKOV, 105, Cerenkov photon generation
+REFL, 106, Cerenkov photon refection
+REFR, 107, Cerenkov photon refraction
+SYNC, 108, synchrotron radiation generation
+STRA, 109, PAI or ASHO model used for energy loss fuctuations.
+*/
+
 	};
 	
 	// from skdetsim source file 'gt2pd.h'

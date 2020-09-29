@@ -21,6 +21,7 @@
 #include "THStack.h"
 #include "TLegend.h"
 #include "TPie.h"
+#include "TStyle.h"
 
 // TODO move to DataModel RootAlgorithms or something
 std::unique_ptr<TPie> GeneratePieFromHisto(TH1F* histo, int verbose=0);
@@ -47,6 +48,7 @@ bool PlotNeutronCaptures::Initialise(std::string configfile, DataModel &data){
 	m_variables.Get("outputFile",outputFile);          // output file to write
 	m_variables.Get("drawPlots",DrawPlots);            // show root plots while working? otherwise just save
 	m_variables.Get("maxEvents",maxEvents);            // user limit to number of events to process
+	m_variables.Get("writeFrequency",WRITE_FREQUENCY); // how many events to TTree::Fill between TTree::Writes
 	
 	// open the input TFile and TTree
 	// ------------------------------
@@ -62,7 +64,12 @@ bool PlotNeutronCaptures::Initialise(std::string configfile, DataModel &data){
 	// travel distance components relative to neutrino dir
 	friendTree->Branch("neutron_longitudinal_travel",&neutron_longitudinal_travel,32000,0);
 	friendTree->Branch("neutron_perpendicular_travel",&neutron_perpendicular_travel,32000,0);
-	friendTree->Branch("total_gamma_energy",&total_gamma_energy,32000,0);
+	
+//	// should we turn the aliases into proper branches?
+//	friendTree->Branch("neutron_tot_gammaE",&total_gamma_energy,32000,0);
+//	friendTree->Branch("neutron_travel_dist",&placeholder,32000,0);
+//	friendTree->Branch("neutron_travel_time",&placeholder,32000,0);
+//	friendTree->Branch("neutron_n_daughters",&placeholder,32000,0);
 	
 	if(DrawPlots){
 		// Only one TApplication may exist. Get it, or make it if there isn't one
@@ -149,7 +156,8 @@ int PlotNeutronCaptures::FillFriend(){
 		TVector3 neutron_travel_vector = 
 			neutron_end_pos->at(neutron_i).Vect() - neutron_start_pos->at(neutron_i).Vect();
 		double next_neutron_longitudinal_travel = neutron_travel_vector.Dot(neutrino_momentum.Unit());
-		double next_neutron_perpendicular_travel = neutron_travel_vector.Mag()-next_neutron_longitudinal_travel;
+		double next_neutron_perpendicular_travel = 
+			neutron_travel_vector.Mag()-abs(next_neutron_longitudinal_travel); // TODO fix sign?
 		neutron_longitudinal_travel.push_back(next_neutron_longitudinal_travel);
 		neutron_perpendicular_travel.push_back(next_neutron_perpendicular_travel);
 		
@@ -172,6 +180,7 @@ int PlotNeutronCaptures::FillFriend(){
 	// XXX any further event-wise info we want to add to the friend tree?
 	Log(toolName+" filling friendTree",v_debug,verbosity);
 	friendTree->Fill();
+	if((entrynum%WRITE_FREQUENCY)==0) WriteTree();
 	
 //	// angle between vector 'd' (from nu intx vertex and neutron capture)
 //	// and "inferred neutron momentum (direction)", 'p', calculated somehow from CCQE assumption...?
@@ -204,12 +213,13 @@ bool PlotNeutronCaptures::Finalise(){
 	// write out the friend tree
 	Log(toolName+" writing output TTree",v_debug,verbosity);
 	outfile->cd();
-	friendTree->Write();
+	friendTree->Write("",TObject::kOverwrite);
 	
 	// make and write out histograms
 	Log(toolName+" making histograms",v_debug,verbosity);
 	MakeHistos();
 	
+	Log(toolName+" cleanup",v_debug,verbosity);
 	if(friendTree) friendTree->ResetBranchAddresses();
 	if(outfile){ outfile->Close(); delete outfile; outfile=nullptr; }
 	
@@ -257,25 +267,27 @@ int PlotNeutronCaptures::MakeHistos(){
 	// ============
 	outfile->cd();
 	
-	// FIXME Specify colours for plots added to THStacks
-	// figure out how to save TLegend with THStack
-	
 	// ======================
 	// cumulative plots
 	// ======================
 	Log(toolName+" making aggregate plots",v_debug,verbosity);
 	// neutron energy
-	TH1D hNeutronE("hNeutronE","Neutron Energy;Neutron Energy [MeV];Num Events",100,0,100);
+	TH1D hNeutronE("hNeutronE","Neutron Energy;Neutron Energy [MeV];Num Events",100,0,250);
 	intree->Draw("neutron_start_energy>>hNeutronE");
 	hNeutronE.Write();
 	
 	// neutron travel distance
-	TH1D hNeutronTravelDist("hNeutronTravelDist","Neutron Travel Distance;Distance [cm];Num Events",100,0,2200);
-	intree->Draw("n_travel_dist>>hNeutronTravelDist");
+	TH1D hNeutronTravelDist("hNeutronTravelDist","Neutron Travel Distance;Distance [cm];Num Events",100,0,125);
+	intree->Draw("neutron_travel_dist>>hNeutronTravelDist");
 	hNeutronTravelDist.Write();
 	
+	// neutron travel time
+	TH1D hNeutronTravelTime("hNeutronTravelTime","Neutron Travel Time;Time [ns];Num Events",100,0,1800E3);
+	intree->Draw("neutron_travel_time>>hNeutronTravelTime");
+	hNeutronTravelTime.Write();
+	
 	// gamma mulitiplicity
-	TH1D hGammaNum("hGammaNum","Gamma Multiplicity (All Nuclides);Num Gammas Emitted;Num Events",100,0,20);
+	TH1D hGammaNum("hGammaNum","Gamma Multiplicity (All Nuclides);Num Gammas Emitted;Num Events",100,0,30);
 	intree->Draw("neutron_n_daughters>>hGammaNum");
 	hGammaNum.Write();
 	
@@ -286,11 +298,11 @@ int PlotNeutronCaptures::MakeHistos(){
 	
 	// total gamma energy from the neutron capture
 	TH1D hSumGammaE("hSumGammaE","Total Emitted Gamma Energy (All Nuclides);Sum of Gamma Energy [MeV];Num Events",100,0,10);
-	friendTree->Draw("total_gamma_energy>>hSumGammaE");
+	intree->Draw("neutron_tot_gammaE>>hSumGammaE");
 	hSumGammaE.Write();
 	
 	// gamma emission time (parent lifetime)
-	TH1D hGammaT("hGammaT", "Gamma Emission Time (All Nuclides);Gamma Emission Time [ns];Num Events",100,0,100);
+	TH1D hGammaT("hGammaT", "Gamma Emission Time (All Nuclides);Gamma Emission Time [ns];Num Events",100,0,1800E3);
 	intree->Draw("gamma_time>>hGammaT");
 	hGammaT.Write();
 	
@@ -318,24 +330,27 @@ int PlotNeutronCaptures::MakeHistos(){
 	// broken down by capture nucleus
 	// ==============================
 	Log(toolName+" making total gamma energy stack",v_debug,verbosity);
+	auto statsboxdefault = gStyle->GetOptStat();
+	gStyle->SetOptStat(0); // turn off stats box; overlaps with legends
 	// Total Gamma Energy
 	// ------------------
 	// capture on H
 	TH1D hTotGammaE_H("hTotGammaE_H", "Total Gamma Energy (Capture on H);Gamma Energy [MeV];Num Events",100,0,10);
-	// friend the input tree so we can cut on nuclide_daughter_pdg
-	friendTree->AddFriend(intree);
-	friendTree->Draw("total_gamma_energy>>hTotGammaE_H","nuclide_daughter_pdg==100045");
+	intree->Draw("neutron_tot_gammaE>>hTotGammaE_H","nuclide_daughter_pdg==100045");
 	
 	// capture on Gd-155 -> daughter nuclide Gd-156
 	TH1D hTotGammaE_Gd_155("hTotGammaE_Gd_155", "Total Gamma Energy (Capture on Gd-155);Gamma Energy [MeV];Num Events",100,0,10);
-	friendTree->Draw("total_gamma_energy>>hTotGammaE_Gd_155","nuclide_daughter_pdg==1000641560");
+	intree->Draw("neutron_tot_gammaE>>hTotGammaE_Gd_155","nuclide_daughter_pdg==1000641560");
 	
 	// capture on Gd-157 -> daughter nuclide Gd-158
 	TH1D hTotGammaE_Gd_157("hTotGammaE_Gd_157", "Total Gamma Energy (Capture on Gd-157);Gamma Energy [MeV];Num Events",100,0,10);
-	friendTree->Draw("total_gamma_energy>>hTotGammaE_Gd_157","nuclide_daughter_pdg==1000641580");
+	intree->Draw("neutron_tot_gammaE>>hTotGammaE_Gd_157","nuclide_daughter_pdg==1000641580");
 	
 	// Stack of all of them
 	THStack hTotGammaE_Stack("hTotGammaE_Stack","Gamma Spectrum by Capture Nucleus;Gamma Energy [MeV];Num Events");
+	hTotGammaE_H.SetLineColor(kRed);
+	hTotGammaE_Gd_155.SetLineColor(kBlue);
+	hTotGammaE_Gd_157.SetLineColor(kMagenta);
 	hTotGammaE_Stack.Add(&hTotGammaE_H);
 	hTotGammaE_Stack.Add(&hTotGammaE_Gd_155);
 	hTotGammaE_Stack.Add(&hTotGammaE_Gd_157);
@@ -347,7 +362,13 @@ int PlotNeutronCaptures::MakeHistos(){
 	StackLegend.AddEntry(&hTotGammaE_Gd_157,"Gd-157","l");
 	hTotGammaE_Stack.Draw();
 	StackLegend.Draw();
+	// add the legend to the list of functions so that it gets saved on Write call
+	// a THStack doesn't have a list of functions, so we have to add it to a component histo
+	hTotGammaE_H.GetListOfFunctions()->Add(&StackLegend);
 	hTotGammaE_Stack.Write();
+	// we need to remove it afterwards, though, otherwise the histograms thinks it owns it now,
+	// and tries to delete it when the function returns, causing a segfault.
+	hTotGammaE_H.GetListOfFunctions()->Clear();
 	
 	// Gamma Multiplicity
 	// -------------------
@@ -366,12 +387,17 @@ int PlotNeutronCaptures::MakeHistos(){
 	
 	// Stack of all of them
 	THStack hGammaNum_Stack("hGammaNum_Stack","Gamma Multiplicity by Capture Nucleus;Num Gammas;Num Events");
+	hGammaNum_H.SetLineColor(kRed);
+	hGammaNum_Gd_155.SetLineColor(kBlue);
+	hGammaNum_Gd_157.SetLineColor(kMagenta);
 	hGammaNum_Stack.Add(&hGammaNum_H);
 	hGammaNum_Stack.Add(&hGammaNum_Gd_155);
 	hGammaNum_Stack.Add(&hGammaNum_Gd_157);
 	hGammaNum_Stack.Draw();
 	StackLegend.Draw();
+	hGammaNum_H.GetListOfFunctions()->Add(&StackLegend);
 	hGammaNum_Stack.Write();
+	hGammaNum_H.GetListOfFunctions()->Clear();
 	
 	// Gamma Energy Spectrum
 	// ---------------------
@@ -390,12 +416,25 @@ int PlotNeutronCaptures::MakeHistos(){
 	
 	// Stack of all of them
 	THStack hGammaE_Stack("hGammaE_Stack","Gamma Spectrum by Capture Nucleus;Gamma Energy [MeV];Num Events");
+	hGammaE_H.SetLineColor(kRed);
+	hGammaE_Gd_155.SetLineColor(kBlue);
+	hGammaE_Gd_157.SetLineColor(kMagenta);
 	hGammaE_Stack.Add(&hGammaE_H);
 	hGammaE_Stack.Add(&hGammaE_Gd_155);
 	hGammaE_Stack.Add(&hGammaE_Gd_157);
 	hGammaE_Stack.Draw();
 	StackLegend.Draw();
+	hGammaE_H.GetListOfFunctions()->Add(&StackLegend);
 	hGammaE_Stack.Write();
+	hGammaE_H.GetListOfFunctions()->Clear();
+	
+	// restore stats box behaviour
+	gStyle->SetOptStat(statsboxdefault);
+	
+	// Misc
+	// ====
+	friendTree->SetAlias("neutron_travel_dist",
+	                     "sqrt(pow(neutron_longitudinal_travel,2.)+pow(neutron_perpendicular_travel,2.))");
 	
 	return 1;
 }
@@ -405,6 +444,8 @@ int PlotNeutronCaptures::GetBranches(){
 	int success = (
 //	(myTreeReader.GetBranchValue("filename",filename))                         &&
 //	(myTreeReader.GetBranchValue("water_transparency",water_transparency))     &&
+//	(myTreeReader.GetBranchValue("skdetsim_version",skdetsim_version))         &&
+//	(myTreeReader.GetBranchValue("tba_table_version",tba_table_version))       &&
 //	(myTreeReader.GetBranchValue("entry_number",entry_number))                 &&
 //	(myTreeReader.GetBranchValue("subevent_num",subevent_number))              &&
 	(myTreeReader.GetBranchValue("primary_pdg",primary_pdg))                   &&
@@ -421,7 +462,6 @@ int PlotNeutronCaptures::GetBranches(){
 //	(myTreeReader.GetBranchValue("neutron_start_energy",neutron_start_energy)) &&
 //	(myTreeReader.GetBranchValue("neutron_end_energy",neutron_end_energy))     &&
 //	(myTreeReader.GetBranchValue("neutron_end_process",neutron_end_process))   &&
-//	(myTreeReader.GetBranchValue("neutron_n_daughters",neutron_ndaughters))    &&
 	(myTreeReader.GetBranchValue("gamma_energy",gamma_energy))                 //&&
 //	(myTreeReader.GetBranchValue("gamma_time",gamma_time))                     &&
 	);
@@ -436,6 +476,20 @@ void PlotNeutronCaptures::ClearOutputTreeBranches(){
 	neutron_perpendicular_travel.clear();
 	total_gamma_energy.clear();
 }
+
+int PlotNeutronCaptures::WriteTree(){
+	Log(toolName+" writing TTree",v_debug,verbosity);
+	outfile->cd();
+	// TObject::Write returns the total number of bytes written to the file.
+	// It returns 0 if the object cannot be written.
+	int bytes = friendTree->Write("",TObject::kOverwrite);
+	if(bytes<=0){
+		Log(toolName+" Error writing TTree!",v_error,verbosity);
+	} else if(verbosity>2){
+		Log(toolName+ " Wrote "+toString(get_ok)+" bytes",v_debug,verbosity);
+	}
+	return bytes;
+};
 
 // Produce pie chart of nuclei that captured neutrons
 // ==================================================

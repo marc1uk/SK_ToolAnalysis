@@ -1,8 +1,12 @@
 # vim: filetype=Makefile #
 # FindNeutronCaptures config file
-verbosity 2
+verbosity 1
 drawPlots 0    # whether to show root plots during execution
-inputFile /HOME/LinuxSystemFiles/SK/skdetsim/outputs/skdetsim_r77957.viazbs.root
-outputFile plotNeutronsTest.root
+#inputFile /HOME/LinuxSystemFiles/SK/skdetsim/outputs/skdetsim_r77957.viazbs.root
+#outputFile plotNeutronsTest.root
+#inputFile /HOME/LinuxSystemFiles/SK/skdetsim/outputs/skdetsimgd_sk4gdcard.root
+#outputFile skgdNeutronsTest.root
+inputFile /HOME/LinuxSystemFiles/SK/skdetsim/skdetsim_elhedri/printneutrons.root
+outputFile /HOME/LinuxSystemFiles/SK/skdetsim/skdetsim_elhedri/truthneutrons.root
 maxEvents -1
 writeFrequency 10
