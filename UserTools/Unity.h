@@ -5,3 +5,4 @@
 #include "LoadFileList.h"
 #include "RootReadTest.h"
 #include "PlotNeutronCaptures.h"
+#include "PurewaterLi9Rate.h"

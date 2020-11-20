@@ -10,6 +10,7 @@
 #include <boost/regex.hpp> // since std::regex doesn't work
 #include <boost/regex/pattern_except.hpp>
 #include <sstream>
+#include <fstream>   // for ofstream
 
 #include "basic_array.h"
 
@@ -63,6 +64,27 @@ bool solveQuadratic(const T &a, const T &b, const T &c, T &x0, T &x1){
 	if (x0>x1) std::swap(x0, x1);
 	
 	return true;
+}
+
+template <typename T>
+void printVals(T &container, int messagelevel, int verbosity, std::string preamble="", std::string postamble=""){
+	// TODO: this is ok for vectors and arrays, but won't work for maps
+	// TODO: generalise the Log function to be variadic, and accept containers, which are automatically
+	// unwrapped in a suitable way. Could we even handle tuples? Rarely used though
+	// if messagelevel==0 (error), print to cerr, otherwise print to cout
+	std::ofstream outputbuf;
+	if(messagelevel==0){
+		outputbuf.copyfmt(std::cerr);
+		outputbuf.clear(std::cerr.rdstate());
+		outputbuf.basic_ios<char>::rdbuf(std::cerr.rdbuf());
+	} else {
+		outputbuf.copyfmt(std::cout);
+		outputbuf.clear(std::cout.rdstate());
+		outputbuf.basic_ios<char>::rdbuf(std::cout.rdbuf());
+	}
+	outputbuf<<preamble<<" {";
+	for(auto it=container.begin(); it!=container.end(); ++it){ outputbuf<<(*it); }
+	outputbuf<<"} "<<postamble<<std::endl;
 }
 
 #endif

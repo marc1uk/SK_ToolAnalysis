@@ -1,0 +1,16 @@
+verbosity 10
+inputFile /host/software/relic_sk4_ana/li9/subsetfile.root
+outputFile /host/software/relic_sk4_ana/li9/li9_results.root
+maxEntries 20                 # max num input entries to process
+writeFrequency 50               # update output file after this many entries
+
+max_closest_muon_dt 0.001       # seconds. 'cut_1ms'   in sonia's code
+max_closest_lowe_dx 490         # cm       'cut_multi' in sonia's code
+
+num_bdt_cut_bins   50           # BDT cut bins (decimal log scale)
+bdt_cut_min 0.2                 # range of BDT FOM thresholds to explore
+bdt_cut_max 0.999               # 
+ntag_FOM_threshold 0.995        # nominal BDT FOM threshold for Li9 tagging (ncut_li9 in sonia's code)
+
+run_min 68671                   # SHE trigger threshold lowered to 8 MeV
+run_max 73031                   # Yang Zhang's time range

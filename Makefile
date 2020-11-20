@@ -1,9 +1,9 @@
-include $(SKOFL_ROOT)/config.gmk
+include $(SKOFL_ROOT)/config.gmk  # pulls in libskroot.so as well
 
 # user library paths
-LDFLAGS = -L/HOME/LinuxSystemFiles/SK/skrootlibs -L/HOME/LinuxSystemFiles/SK/stllibs
+LDFLAGS = -L/host/software/skrootlibs -L/host/software/stllibs -L/host/software/relic_sk4_ana/relic_sk4_ana/data_reduc/third/lib
 # user libraries
-LOCAL_LIBS = -lRootStl #-lSkroot  ## why do we have -lskroot (twice) and lSkroot??
+LOCAL_LIBS = -lRootStl -lthirdredvars
 
 LD_RUN_PATH=$(SKOFL_LIBDIR):$(A_LIBDIR)
 

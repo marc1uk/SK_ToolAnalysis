@@ -12,6 +12,7 @@ if (tool=="TruthNeutronCaptures_v3") ret=new TruthNeutronCaptures_v3;
 if (tool=="LoadFileList") ret=new LoadFileList;
 if (tool=="RootReadTest") ret=new RootReadTest;
 if (tool=="PlotNeutronCaptures") ret=new PlotNeutronCaptures;
+if (tool=="PurewaterLi9Rate") ret=new PurewaterLi9Rate;
 return ret;
 }
 
