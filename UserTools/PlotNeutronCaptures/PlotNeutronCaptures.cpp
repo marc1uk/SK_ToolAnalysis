@@ -65,8 +65,13 @@ bool PlotNeutronCaptures::Initialise(std::string configfile, DataModel &data){
 	friendTree->Branch("neutron_longitudinal_travel",&neutron_longitudinal_travel,32000,0);
 	friendTree->Branch("neutron_perpendicular_travel",&neutron_perpendicular_travel,32000,0);
 	
-//	// should we turn the aliases into proper branches?
-//	friendTree->Branch("neutron_tot_gammaE",&total_gamma_energy,32000,0);
+	// to break these down on a per-capture (not per-event) basis we need to store them in branches
+	friendTree->Branch("neutron_n_gammas",&neutron_n_gammas,32000,0);
+	friendTree->Branch("neutron_n_electrons",&neutron_n_electrons,32000,0);
+	friendTree->Branch("neutron_n_daughters",&neutron_n_daughters,32000,0);
+	friendTree->Branch("neutron_tot_gammaE",&total_gamma_energy,32000,0);
+	friendTree->Branch("neutron_tot_electronE",&total_electron_energy,32000,0);
+	friendTree->Branch("neutron_tot_daughterE",&total_daughter_energy,32000,0);
 //	friendTree->Branch("neutron_travel_dist",&placeholder,32000,0);
 //	friendTree->Branch("neutron_travel_time",&placeholder,32000,0);
 //	friendTree->Branch("neutron_n_daughters",&placeholder,32000,0);
@@ -166,6 +171,16 @@ int PlotNeutronCaptures::FillFriend(){
 			total_gamma_E+=agamma;
 		}
 		total_gamma_energy.push_back(total_gamma_E);
+		neutron_n_gammas.push_back(gamma_energy->at(neutron_i).size());
+		
+		double total_electron_E=0;
+		for(auto&& aelectron : electron_energy->at(neutron_i)){
+			total_electron_E+=aelectron;
+		}
+		total_electron_energy.push_back(total_electron_E);
+		neutron_n_electrons.push_back(electron_energy->at(neutron_i).size());
+		neutron_n_daughters.push_back(neutron_n_gammas.back()+neutron_n_electrons.back());
+		total_daughter_energy.push_back(total_electron_E+total_gamma_E);
 		
 		// keep a map with capture nuclides to num capture events
 		int capture_nuclide_pdg = nuclide_daughter_pdg->at(neutron_i);
@@ -287,9 +302,9 @@ int PlotNeutronCaptures::MakeHistos(){
 	hNeutronTravelTime.Write();
 	
 	// gamma mulitiplicity
-	TH1D hGammaNum("hGammaNum","Gamma Multiplicity (All Nuclides);Num Gammas Emitted;Num Events",100,0,30);
-	intree->Draw("neutron_n_daughters>>hGammaNum");
-	hGammaNum.Write();
+	TH1D hNumGammas("hNumGammas","Gamma Multiplicity (All Nuclides);Num Gammas Emitted;Num Events",100,0,30);
+	friendTree->Draw("neutron_n_gammas>>hNumGammas");
+	hNumGammas.Write();
 	
 	// gamma energy
 	TH1D hGammaE("hGammaE", "Gamma Energy (All Nuclides);Gamma Energy [MeV];Num Events",100,0,10);
@@ -298,13 +313,43 @@ int PlotNeutronCaptures::MakeHistos(){
 	
 	// total gamma energy from the neutron capture
 	TH1D hSumGammaE("hSumGammaE","Total Emitted Gamma Energy (All Nuclides);Sum of Gamma Energy [MeV];Num Events",100,0,10);
-	intree->Draw("neutron_tot_gammaE>>hSumGammaE");
+	friendTree->Draw("neutron_tot_gammaE>>hSumGammaE");
 	hSumGammaE.Write();
 	
 	// gamma emission time (parent lifetime)
 	TH1D hGammaT("hGammaT", "Gamma Emission Time (All Nuclides);Gamma Emission Time [ns];Num Events",100,0,1800E3);
 	intree->Draw("gamma_time>>hGammaT");
 	hGammaT.Write();
+	
+	// electron mulitiplicity
+	TH1D hNumElectrons("hNumElectrons","Electron Multiplicity (All Nuclides);Num Electrons Emitted;Num Events",100,0,30);
+	friendTree->Draw("neutron_n_electrons>>hNumElectrons");
+	hNumElectrons.Write();
+	
+	// electron energy
+	TH1D hElectronE("hElectronE", "Electron Energy (All Nuclides);Electron Energy [MeV];Num Events",100,0,10);
+	intree->Draw("electron_energy>>hElectronE");
+	hElectronE.Write();
+	
+	// total electron energy from the neutron capture
+	TH1D hSumElectronE("hSumElectronE","Total Emitted Electron Energy (All Nuclides);Sum of Electron Energy [MeV];Num Events",100,0,10);
+	friendTree->Draw("neutron_tot_electronE>>hSumElectronE");
+	hSumElectronE.Write();
+	
+	// electron emission time (parent lifetime)
+	TH1D hElectronT("hElectronT", "Electron Emission Time (All Nuclides);Electron Emission Time [ns];Num Events",100,0,1800E3);
+	intree->Draw("electron_time>>hElectronT");
+	hElectronT.Write();
+	
+	// total daughter multiplicity
+	TH1D hNumDaughters("hNumDaughters", "Daughter Multiplicity;Num Daughters;Num Events",100,0,30);
+	friendTree->Draw("neutron_n_daughters>>hNumDaughters");
+	hNumDaughters.Write();
+	
+	// total daughter energy
+	TH1D hSumDaughterE("hSumDaughterE", "Total Daughter Energy;Total Energy [MeV];Num Events",100,0,10);
+	friendTree->Draw("neutron_tot_daughterE>>hSumDaughterE");
+	hSumDaughterE.Write();
 	
 	// pie chart of capture nuclei
 	Log(toolName+" making pie chart",v_debug,verbosity);
@@ -374,30 +419,30 @@ int PlotNeutronCaptures::MakeHistos(){
 	// -------------------
 	Log(toolName+" making gamma multiplicity stack",v_debug,verbosity);
 	// capture on H
-	TH1D hGammaNum_H("hGammaNum_H", "Gamma Multiplicity (Capture on H);Num Gammas;Num Events",100,0,10);
-	intree->Draw("neutron_n_daughters>>hGammaNum_H","nuclide_daughter_pdg==100045");
+	TH1D hNumGammas_H("hNumGammas_H", "Gamma Multiplicity (Capture on H);Num Gammas;Num Events",100,0,10);
+	intree->Draw("Length$(gamma_energy[])>>hNumGammas_H","nuclide_daughter_pdg==100045");
 	
 	// capture on Gd-155 -> daughter nuclide Gd-156
-	TH1D hGammaNum_Gd_155("hGammaNum_Gd_155", "Gamma Multiplicity (Capture on Gd-155);Num Gammas;Num Events",100,0,10);
-	intree->Draw("neutron_n_daughters>>hGammaNum_Gd_155","nuclide_daughter_pdg==1000641560");
+	TH1D hNumGammas_Gd_155("hNumGammas_Gd_155", "Gamma Multiplicity (Capture on Gd-155);Num Gammas;Num Events",100,0,10);
+	intree->Draw("Length$(gamma_energy[])>>hNumGammas_Gd_155","nuclide_daughter_pdg==1000641560");
 	
 	// capture on Gd-157 -> daughter nuclide Gd-158
-	TH1D hGammaNum_Gd_157("hGammaNum_Gd_157", "Gamma Multiplicity (Capture on Gd-157);Num Gammas;Num Events",100,0,10);
-	intree->Draw("neutron_n_daughters>>hGammaNum_Gd_157","nuclide_daughter_pdg==1000641580");
+	TH1D hNumGammas_Gd_157("hNumGammas_Gd_157", "Gamma Multiplicity (Capture on Gd-157);Num Gammas;Num Events",100,0,10);
+	intree->Draw("Length$(gamma_energy[])>>hNumGammas_Gd_157","nuclide_daughter_pdg==1000641580");
 	
 	// Stack of all of them
-	THStack hGammaNum_Stack("hGammaNum_Stack","Gamma Multiplicity by Capture Nucleus;Num Gammas;Num Events");
-	hGammaNum_H.SetLineColor(kRed);
-	hGammaNum_Gd_155.SetLineColor(kBlue);
-	hGammaNum_Gd_157.SetLineColor(kMagenta);
-	hGammaNum_Stack.Add(&hGammaNum_H);
-	hGammaNum_Stack.Add(&hGammaNum_Gd_155);
-	hGammaNum_Stack.Add(&hGammaNum_Gd_157);
-	hGammaNum_Stack.Draw();
+	THStack hNumGammas_Stack("hNumGammas_Stack","Gamma Multiplicity by Capture Nucleus;Num Gammas;Num Events");
+	hNumGammas_H.SetLineColor(kRed);
+	hNumGammas_Gd_155.SetLineColor(kBlue);
+	hNumGammas_Gd_157.SetLineColor(kMagenta);
+	hNumGammas_Stack.Add(&hNumGammas_H);
+	hNumGammas_Stack.Add(&hNumGammas_Gd_155);
+	hNumGammas_Stack.Add(&hNumGammas_Gd_157);
+	hNumGammas_Stack.Draw();
 	StackLegend.Draw();
-	hGammaNum_H.GetListOfFunctions()->Add(&StackLegend);
-	hGammaNum_Stack.Write();
-	hGammaNum_H.GetListOfFunctions()->Clear();
+	hNumGammas_H.GetListOfFunctions()->Add(&StackLegend);
+	hNumGammas_Stack.Write();
+	hNumGammas_H.GetListOfFunctions()->Clear();
 	
 	// Gamma Energy Spectrum
 	// ---------------------
@@ -462,8 +507,10 @@ int PlotNeutronCaptures::GetBranches(){
 //	(myTreeReader.GetBranchValue("neutron_start_energy",neutron_start_energy)) &&
 //	(myTreeReader.GetBranchValue("neutron_end_energy",neutron_end_energy))     &&
 //	(myTreeReader.GetBranchValue("neutron_end_process",neutron_end_process))   &&
-	(myTreeReader.GetBranchValue("gamma_energy",gamma_energy))                 //&&
+	(myTreeReader.GetBranchValue("gamma_energy",gamma_energy))                 &&
 //	(myTreeReader.GetBranchValue("gamma_time",gamma_time))                     &&
+	(myTreeReader.GetBranchValue("electron_energy",electron_energy))         //&&
+//	(myTreeReader.GetBranchValue("electron_time",electron_time))
 	);
 	
 	return success;
@@ -475,6 +522,11 @@ void PlotNeutronCaptures::ClearOutputTreeBranches(){
 	neutron_longitudinal_travel.clear();
 	neutron_perpendicular_travel.clear();
 	total_gamma_energy.clear();
+	total_electron_energy.clear();
+	total_daughter_energy.clear();
+	neutron_n_gammas.clear();
+	neutron_n_electrons.clear();
+	neutron_n_daughters.clear();
 }
 
 int PlotNeutronCaptures::WriteTree(){

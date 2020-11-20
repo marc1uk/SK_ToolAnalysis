@@ -73,7 +73,12 @@ class PlotNeutronCaptures: public Tool {
 	TVector3 muon_momentum;
 	std::vector<double> neutron_longitudinal_travel;     // relative to neutrino dir
 	std::vector<double> neutron_perpendicular_travel;    // relative to neutrino dir
-	std::vector<double> total_gamma_energy;
+	std::vector<double> total_gamma_energy;              // decay gammas
+	std::vector<double> total_electron_energy;           // decay electrons from internal conversion
+	std::vector<double> total_daughter_energy;           // sum of above
+	std::vector<int> neutron_n_gammas;                   // count, per capture
+	std::vector<int> neutron_n_electrons;                // count, per capture
+	std::vector<int> neutron_n_daughters;                // count, per capture
 	
 	TVector3* neutrino_momentump=&neutrino_momentum;     // as far as i can tell we ought not to need these
 	TVector3* muon_momentump=&muon_momentum;             // but TTree::Branch("name",TVector3* obj) segfaults???
@@ -117,6 +122,10 @@ class PlotNeutronCaptures: public Tool {
 	// gammas - potentially many per neutron
 	const std::vector<std::vector<double> >* gamma_energy=nullptr;  // [MeV]
 	const std::vector<std::vector<double> >* gamma_time=nullptr;    // [ns]
+	
+	// electrons - potentially many per neutron
+	const std::vector<std::vector<double> >* electron_energy=nullptr;  // [MeV]
+	const std::vector<std::vector<double> >* electron_time=nullptr;    // [ns]
 	
 	// detector information
 	// total charge? time distribution of hits?

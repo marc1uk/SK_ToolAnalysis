@@ -188,6 +188,10 @@ class TruthNeutronCaptures: public Tool {
 	std::vector<std::vector<double> > out_gamma_energy; // [MeV]
 	std::vector<std::vector<double> > out_gamma_time;   // [ns] since?
 	
+	// internal conversion electrons - potentially many per neutron
+	std::vector<std::vector<double> > out_electron_energy; // [MeV]
+	std::vector<std::vector<double> > out_electron_time;   // [ns] since?
+	
 	// detector information
 	// total charge? time distribution of hits?
 	// build a timestamp and calculate time since last event? using PrevT0?

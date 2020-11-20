@@ -8,6 +8,7 @@ if (tool=="DummyTool") ret=new DummyTool;
 
 if (tool=="TruthNeutronCaptures") ret=new TruthNeutronCaptures;
 if (tool=="TruthNeutronCaptures_v2") ret=new TruthNeutronCaptures_v2;
+if (tool=="TruthNeutronCaptures_v3") ret=new TruthNeutronCaptures_v3;
 if (tool=="LoadFileList") ret=new LoadFileList;
 if (tool=="RootReadTest") ret=new RootReadTest;
 if (tool=="PlotNeutronCaptures") ret=new PlotNeutronCaptures;

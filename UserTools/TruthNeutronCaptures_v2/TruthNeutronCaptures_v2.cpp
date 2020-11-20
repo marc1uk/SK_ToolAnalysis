@@ -94,6 +94,7 @@ bool TruthNeutronCaptures_v2::Execute(){
 	} else {
 		// Pre-Load next input entry so we can stop the toolchain
 		// if we're about to run off the end of the tree or encounter a read error
+		Log(toolName+" reading entry "+toString(entry_number),v_debug,verbosity);
 		get_ok = ReadEntry(entry_number);
 		if(get_ok==0){
 			m_data->vars.Set("StopLoop",1);
@@ -140,101 +141,101 @@ int TruthNeutronCaptures_v2::CalculateVariables(){
 	
 	std::map<int,int> neutrons_map;
 	
-	Log(toolName+" looping over "+toString(mc_info->track_g3_code.size())
+	Log(toolName+" looping over "+toString(sec_info->track_g3_code.size())
 	            +" particles in event "+toString(entry_number),v_debug,verbosity);
-	for(unsigned int particle_i=0; particle_i<mc_info->track_g3_code.size(); ++particle_i){
+	for(unsigned int particle_i=0; particle_i<sec_info->track_g3_code.size(); ++particle_i){
 		// get indices for vertex info
-		int creation_vtx_index = mc_info->track_creation_vtx.at(particle_i);
-		int termination_vtx_index = mc_info->track_termination_vtx.at(particle_i);
-		std::cout<<"particle "<<particle_i<<" creation vtx index "<<creation_vtx_index
-				 <<", termination_vtx_index "<<termination_vtx_index<<std::endl;
+		int creation_vtx_index = sec_info->track_creation_vtx.at(particle_i);
+		int termination_vtx_index = sec_info->track_termination_vtx.at(particle_i);
+		Log(toolName+" particle "+toString(particle_i)+" creation vtx index "+toString(creation_vtx_index)
+				 +", termination_vtx_index "+toString(termination_vtx_index),v_debug,verbosity);
 		
 		// store primary particles
-		if(mc_info->track_parent.at(particle_i)<0){
-			std::cout<<"storing primary"<<std::endl;
-			out_primary_pdg.push_back(G3ParticleCodeToPdg(mc_info->track_g3_code.at(particle_i)));
+		if(sec_info->track_parent.at(particle_i)<0){
+			Log(toolName+" storing primary",v_debug,verbosity);
+			out_primary_pdg.push_back(G3ParticleCodeToPdg(sec_info->track_g3_code.at(particle_i)));
 			// store initial momentum
-			out_primary_start_mom.emplace_back(mc_info->track_ini_momentum.at(particle_i)[0],
-			                                   mc_info->track_ini_momentum.at(particle_i)[1],
-			                                   mc_info->track_ini_momentum.at(particle_i)[2]);
+			out_primary_start_mom.emplace_back(sec_info->track_ini_momentum.at(particle_i)[0],
+			                                   sec_info->track_ini_momentum.at(particle_i)[1],
+			                                   sec_info->track_ini_momentum.at(particle_i)[2]);
 			// calculate initial energy - is this relativistic?
 			float particle_e = sqrt(
-				pow(mc_info->track_ini_momentum.at(particle_i)[0],2.f)+
-				pow(mc_info->track_ini_momentum.at(particle_i)[1],2.f)+
-				pow(mc_info->track_ini_momentum.at(particle_i)[2],2.f));
+				pow(sec_info->track_ini_momentum.at(particle_i)[0],2.f)+
+				pow(sec_info->track_ini_momentum.at(particle_i)[1],2.f)+
+				pow(sec_info->track_ini_momentum.at(particle_i)[2],2.f));
 			out_primary_energy.push_back(particle_e*1000.0f); // convert GeV to MeV
 			// store initial and final positions
-			if((creation_vtx_index>=0)&&(creation_vtx_index<int(mc_info->vertex_time.size()))){
-				out_primary_start_pos.emplace_back(mc_info->vertex_pos.at(creation_vtx_index)[0],
-					                               mc_info->vertex_pos.at(creation_vtx_index)[1],
-					                               mc_info->vertex_pos.at(creation_vtx_index)[2],
-					                               mc_info->vertex_time.at(creation_vtx_index)
-					                               +mc_info->track_creation_toffset.at(particle_i));
+			if((creation_vtx_index>=0)&&(creation_vtx_index<int(sec_info->vertex_time.size()))){
+				out_primary_start_pos.emplace_back(sec_info->vertex_pos.at(creation_vtx_index)[0],
+					                               sec_info->vertex_pos.at(creation_vtx_index)[1],
+					                               sec_info->vertex_pos.at(creation_vtx_index)[2],
+					                               sec_info->vertex_time.at(creation_vtx_index)
+					                               +sec_info->track_creation_toffset.at(particle_i));
 			} else {
 				out_primary_start_pos.emplace_back(0,0,0,0);
 			}
-			if((termination_vtx_index>=0)&&(termination_vtx_index<int(mc_info->vertex_time.size()))){
-				out_primary_end_pos.emplace_back(mc_info->vertex_pos.at(termination_vtx_index)[0],
-					                             mc_info->vertex_pos.at(termination_vtx_index)[1],
-					                             mc_info->vertex_pos.at(termination_vtx_index)[2],
-					                             mc_info->vertex_time.at(termination_vtx_index));
+			if((termination_vtx_index>=0)&&(termination_vtx_index<int(sec_info->vertex_time.size()))){
+				out_primary_end_pos.emplace_back(sec_info->vertex_pos.at(termination_vtx_index)[0],
+					                             sec_info->vertex_pos.at(termination_vtx_index)[1],
+					                             sec_info->vertex_pos.at(termination_vtx_index)[2],
+					                             sec_info->vertex_time.at(termination_vtx_index));
 			} else {
 				out_primary_end_pos.emplace_back(0,0,0,0);
 			}
 		}
 		
 		// store neutrons and parent nuclides
-		if(mc_info->track_g3_code.at(particle_i)==13){
-			std::cout<<"storing neutron"<<std::endl;
+		if(sec_info->track_g3_code.at(particle_i)==13){
+			Log(toolName+" storing neutron",v_debug,verbosity);
 			// TODO could store initial momentum, now that we have it
 			// but do we need it? re-think output file given info
 			// we now have available...
 			
 			// calculate initial energy - is this relativistic?
 			float particle_e = sqrt(
-				pow(mc_info->track_ini_momentum.at(particle_i)[0],2.f)+
-				pow(mc_info->track_ini_momentum.at(particle_i)[1],2.f)+
-				pow(mc_info->track_ini_momentum.at(particle_i)[2],2.f));
+				pow(sec_info->track_ini_momentum.at(particle_i)[0],2.f)+
+				pow(sec_info->track_ini_momentum.at(particle_i)[1],2.f)+
+				pow(sec_info->track_ini_momentum.at(particle_i)[2],2.f));
 			out_neutron_start_energy.push_back(particle_e*1000.0f); // convert GeV to MeV
 			
 			// energy at capture
-			if((termination_vtx_index>=0)&&(termination_vtx_index<int(mc_info->vertex_time.size()))){
+			if((termination_vtx_index>=0)&&(termination_vtx_index<int(sec_info->vertex_time.size()))){
 				particle_e = sqrt(
-					pow(mc_info->vertex_incident_particle_momentum.at(termination_vtx_index)[0],2.f)+
-					pow(mc_info->vertex_incident_particle_momentum.at(termination_vtx_index)[1],2.f)+
-					pow(mc_info->vertex_incident_particle_momentum.at(termination_vtx_index)[2],2.f));
+					pow(sec_info->vertex_incident_particle_momentum.at(termination_vtx_index)[0],2.f)+
+					pow(sec_info->vertex_incident_particle_momentum.at(termination_vtx_index)[1],2.f)+
+					pow(sec_info->vertex_incident_particle_momentum.at(termination_vtx_index)[2],2.f));
 				out_neutron_end_energy.push_back(particle_e*1000.0f); // convert GeV to MeV
 				// XXX always 1GeV exactly... same as initial energy... bug?
 			} else {
 				out_neutron_end_energy.push_back(-1.);
 			}
 			// initial position
-			if((creation_vtx_index>=0)&&(creation_vtx_index<int(mc_info->vertex_time.size()))){
-				out_neutron_start_pos.emplace_back(mc_info->vertex_pos.at(creation_vtx_index)[0],
-					                               mc_info->vertex_pos.at(creation_vtx_index)[1],
-					                               mc_info->vertex_pos.at(creation_vtx_index)[2],
-					                               mc_info->vertex_time.at(creation_vtx_index)
-					                               +mc_info->track_creation_toffset.at(particle_i));
+			if((creation_vtx_index>=0)&&(creation_vtx_index<int(sec_info->vertex_time.size()))){
+				out_neutron_start_pos.emplace_back(sec_info->vertex_pos.at(creation_vtx_index)[0],
+					                               sec_info->vertex_pos.at(creation_vtx_index)[1],
+					                               sec_info->vertex_pos.at(creation_vtx_index)[2],
+					                               sec_info->vertex_time.at(creation_vtx_index)
+					                               +sec_info->track_creation_toffset.at(particle_i));
 			} else {
 				out_neutron_start_pos.emplace_back(0,0,0,0);
 			}
 			// final position and termination process
-			if((termination_vtx_index>=0)&&(termination_vtx_index<int(mc_info->vertex_time.size()))){
-				out_neutron_end_pos.emplace_back(mc_info->vertex_pos.at(termination_vtx_index)[0],
-					                             mc_info->vertex_pos.at(termination_vtx_index)[1],
-					                             mc_info->vertex_pos.at(termination_vtx_index)[2],
-					                             mc_info->vertex_time.at(termination_vtx_index));
-				out_neutron_end_process.push_back(mc_info->vertex_g3_process_code.at(termination_vtx_index));
+			if((termination_vtx_index>=0)&&(termination_vtx_index<int(sec_info->vertex_time.size()))){
+				out_neutron_end_pos.emplace_back(sec_info->vertex_pos.at(termination_vtx_index)[0],
+					                             sec_info->vertex_pos.at(termination_vtx_index)[1],
+					                             sec_info->vertex_pos.at(termination_vtx_index)[2],
+					                             sec_info->vertex_time.at(termination_vtx_index));
+				out_neutron_end_process.push_back(sec_info->vertex_g3_process_codes.at(termination_vtx_index).at(0));
 			} else {
 				out_neutron_end_pos.emplace_back(0,0,0,0);
 				out_neutron_end_process.push_back(-1);
 			}
-			// number of gammas
+			// number of daughters
 			neutrons_map.emplace(particle_i,out_neutron_ndaughters.size());
 			out_neutron_ndaughters.push_back(0); // placeholder
 			// capture nuclide pdg
-			if((creation_vtx_index>=0) && (creation_vtx_index<int(mc_info->vertex_time.size()))){
-				out_nuclide_parent_pdg.push_back(mc_info->vertex_target_g3_code.at(creation_vtx_index));
+			if((creation_vtx_index>=0) && (creation_vtx_index<int(sec_info->vertex_time.size()))){
+				out_nuclide_parent_pdg.push_back(sec_info->vertex_target_g3_code.at(creation_vtx_index));
 			}
 			// daughter nuclide pdg
 			out_nuclide_daughter_pdg.push_back(0); // placeholder
@@ -244,65 +245,94 @@ int TruthNeutronCaptures_v2::CalculateVariables(){
 	// pre-allocate a vector of gammas for each neutron
 	out_gamma_energy.resize(out_neutron_start_pos.size());
 	out_gamma_time.resize(out_neutron_start_pos.size());
-	std::cout<<"pre-allocating "<<out_neutron_start_pos.size()<<" vectors for gammas"<<std::endl;
+	out_electron_energy.resize(out_neutron_start_pos.size());
+	out_electron_time.resize(out_neutron_start_pos.size());
+	Log(toolName+" pre-allocating "+toString(out_neutron_start_pos.size())
+	            +" products vectors for neutron captures",v_debug,verbosity);
 	
 	// scan again, this time filling gamma and daughter nuclide information
 	// the order of recording may be such that this re-scan isn't necessary
 	// (if daughters always follow the neutrons they came from)
 	// but for now, i can't remember if that's necessarily the case
-	for(unsigned int particle_i=0; particle_i<mc_info->track_g3_code.size(); ++particle_i){
-		int creation_vtx_index = mc_info->track_creation_vtx.at(particle_i);
-		int parent_index = mc_info->track_parent.at(particle_i);
-		std::cout<<"particle "<<particle_i<<" creation_vtx_index="<<creation_vtx_index
-				 <<", parent_index="<<parent_index<<std::endl;
+	for(unsigned int particle_i=0; particle_i<sec_info->track_g3_code.size(); ++particle_i){
+		int creation_vtx_index = sec_info->track_creation_vtx.at(particle_i);
+		int parent_index = sec_info->track_parent.at(particle_i);
+		bool from_ncap=false;  // check all process codes for the creation vertex for any that are ncapture
+		for(auto&& aproc: sec_info->vertex_g3_process_codes.at(creation_vtx_index)){
+			from_ncap = from_ncap || (aproc==18);
+		}
 		// TODO add error checking on these
 		// 1. valid creation vertex
 		// 2. from neutron capture
 		// 3. with valid parent neutron
 		// 4. with valid neutron capture event
-		if( (creation_vtx_index>=0) && (creation_vtx_index<int(mc_info->vertex_time.size())) &&
-			(mc_info->vertex_g3_process_code.at(creation_vtx_index)==18) &&
-			(parent_index>=0) && (parent_index<int(mc_info->track_g3_code.size())) &&
+		if( (creation_vtx_index>=0) && (creation_vtx_index<int(sec_info->vertex_time.size())) &&
+			from_ncap &&
+			(parent_index>=0) && (parent_index<int(sec_info->track_g3_code.size())) &&
 			neutrons_map.count(parent_index)
 			){
 			
 			// get index of parent neutron in the array of neutrons
 			int parent_neutron_index = neutrons_map.at(parent_index);
-			std::cout<<"parent neutron index="<<parent_neutron_index<<std::endl;
 			
 			// save gammas
-			if(mc_info->track_g3_code.at(particle_i)==1){
-				std::cout<<"gamma"<<std::endl;
+			if(sec_info->track_g3_code.at(particle_i)==1){
+				Log(toolName+" storing decay gamma",v_debug,verbosity);
 				// add this gamma to the appropriate position
-				out_gamma_time.at(parent_neutron_index).push_back(mc_info->vertex_time.at(creation_vtx_index)
-				                                                 +mc_info->track_creation_toffset.at(particle_i));
+//				out_gamma_time.at(parent_neutron_index).push_back(sec_info->vertex_time.at(creation_vtx_index)
+//				                                                 +sec_info->track_creation_toffset.at(particle_i));
+				out_gamma_time.at(parent_neutron_index).push_back(sec_info->track_creation_toffset.at(particle_i));
 				// calculate energy
 				float particle_e = sqrt(
-					pow(mc_info->track_ini_momentum.at(particle_i)[0],2.f)+
-					pow(mc_info->track_ini_momentum.at(particle_i)[1],2.f)+
-					pow(mc_info->track_ini_momentum.at(particle_i)[2],2.f));
+					pow(sec_info->track_ini_momentum.at(particle_i)[0],2.f)+
+					pow(sec_info->track_ini_momentum.at(particle_i)[1],2.f)+
+					pow(sec_info->track_ini_momentum.at(particle_i)[2],2.f));
 				out_gamma_energy.at(parent_neutron_index).push_back(particle_e*1000.0f); // convert GeV to MeV
 				out_neutron_ndaughters.at(parent_neutron_index)++;
 				if(out_neutron_ndaughters.at(parent_neutron_index)>1){
+					// for "captures on hydrogen" we sometimes see more than one gamma from normal skdetsim
 					// these come from steps where there are multiple lmec entries, typically 12 and 18
 					// i.e. in one step the neutron underwent hadronic scattering, generating a gamma,
 					// and neutron capture, generating another gamma. Which is which? Who knows.
-					std::cout<<"WARNING! event "<<entry_number<<" had "
-							 <<out_neutron_ndaughters.at(parent_neutron_index)
-							 <<" daughters from neutron capture!"<<std::endl;
+					// Moreover, in skdetsim-gd captures on hydrogen frequently have many gammas,
+					// although their sum consistently adds up to 2.2MeV
+					Log("WARNING! event "+toString(entry_number)+" had "
+							 +toString(out_neutron_ndaughters.at(parent_neutron_index))
+							 +" daughters from neutron capture!",v_message,verbosity);
+					//assert(false);
+				}
+			}
+			// save conversion electrons: these will also contribute to total deexcitation energy
+			else if(sec_info->track_g3_code.at(particle_i)==3){
+				Log(toolName+" storing electron",v_debug,verbosity);
+				// add this gamma to the appropriate position
+//				out_electron_time.at(parent_neutron_index).push_back(sec_info->vertex_time.at(creation_vtx_index)
+//				                                                 +sec_info->track_creation_toffset.at(particle_i));
+				out_electron_time.at(parent_neutron_index).push_back(sec_info->track_creation_toffset.at(particle_i));
+				// calculate energy
+				float particle_e = sqrt(
+					pow(sec_info->track_ini_momentum.at(particle_i)[0],2.f)+
+					pow(sec_info->track_ini_momentum.at(particle_i)[1],2.f)+
+					pow(sec_info->track_ini_momentum.at(particle_i)[2],2.f));
+				out_electron_energy.at(parent_neutron_index).push_back(particle_e*1000.0f); // convert GeV to MeV
+				out_neutron_ndaughters.at(parent_neutron_index)++;
+				if(out_neutron_ndaughters.at(parent_neutron_index)>1){
+					Log("WARNING! event "+toString(entry_number)+" had "
+							 +toString(out_neutron_ndaughters.at(parent_neutron_index))
+							 +" daughters from neutron capture!",v_message,verbosity);
 					//assert(false);
 				}
 			}
 			// save daughter nuclide
 			else {
-				std::cout<<"daughter nuclide"<<std::endl;
+				Log(toolName+" storing daughter nuclide",v_debug,verbosity);
 				// sanity check that there really is only one daughter nuclide
 				if(out_nuclide_daughter_pdg.at(parent_neutron_index)!=0){
 					Log(toolName+" ERROR: more than one daughter nuclide for neutron "+toString(parent_neutron_index)
 						+"; current is "+toString(out_nuclide_daughter_pdg.at(parent_neutron_index))+", new is "
-						+toString(G3ParticleCodeToPdg(mc_info->track_g3_code.at(particle_i))),v_error,verbosity);
+						+toString(G3ParticleCodeToPdg(sec_info->track_g3_code.at(particle_i))),v_error,verbosity);
 				}
-				out_nuclide_daughter_pdg.at(parent_neutron_index) = G3ParticleCodeToPdg(mc_info->track_g3_code.at(particle_i));
+				out_nuclide_daughter_pdg.at(parent_neutron_index) = G3ParticleCodeToPdg(sec_info->track_g3_code.at(particle_i));
 			}
 		} // if daughter from neutron capture
 	} // end second loop over particles
@@ -316,7 +346,9 @@ int TruthNeutronCaptures_v2::ReadEntry(long entry_number){
 	
 	int success = 
 	(myTreeReader.GetBranchValue("HEADER",run_header)) &&
-	(myTreeReader.GetBranchValue("MC",mc_info));
+	(myTreeReader.GetBranchValue("MC",mc_info)) &&
+	(myTreeReader.GetBranchValue("SECONDARY",sec_info));
+	
 	
 	// XXX for efficiency, add all used branches to DisableUnusedBranches XXX
 	
@@ -337,7 +369,8 @@ int TruthNeutronCaptures_v2::DisableUnusedBranches(){
 //		"SLE",            // SLEInfo
 //		"SWTRGLIST",      // SoftTrgList
 //		"IDODXTLK",       // IDOD_Xtlk
-		"MC"              // MCInfo
+		"MC",             // MCInfo
+		"SECONDARY"       // SecondaryInfo
 		// ---------------------------
 		// the following branches are added during analysis
 //		"TQLIST",         // TClonesArray
@@ -406,8 +439,12 @@ int TruthNeutronCaptures_v2::CreateOutputFile(std::string filename){
 	// gamma
 	outtree->Branch("gamma_energy",&out_gamma_energy,32000,0);
 	outtree->Branch("gamma_time",&out_gamma_time,32000,0);
-	// use outtree->Draw("Length$(gamma_energy[])"); to draw gamma multiplicity (equivalent to neutron_n_daughters)
-	// use outtree->Draw("Sum$(gamma_energy[])");    to draw total gamma energy from a capture
+	// use outtree->Draw("Length$(gamma_energy[])"); to draw gamma multiplicity FOR THE EVENT (combines captures!)
+	// use outtree->Draw("Sum$(gamma_energy[])");    to draw total gamma energy FOR THE EVENT (combines captures!)
+	
+	// electron
+	outtree->Branch("electron_energy",&out_electron_energy,32000,0);
+	outtree->Branch("electron_time",&out_electron_time,32000,0);
 	
 	return 1;
 }
@@ -436,6 +473,10 @@ void TruthNeutronCaptures_v2::ClearOutputTreeBranches(){
 	// gammas
 	out_gamma_energy.clear();
 	out_gamma_time.clear();
+	
+	// electrons
+	out_electron_energy.clear();
+	out_electron_time.clear();
 	
 	return;
 }
@@ -478,6 +519,7 @@ void TruthNeutronCaptures_v2::PrintBranches(){
 	
 	int total_neutrons=0;
 	int total_gammas=0;
+	int total_electrons=0;
 	// print neutron captures
 	std::cout<<"num neutrons: "<<out_neutron_start_energy.size()<<std::endl;
 	for(int neutron_i=0; neutron_i<out_neutron_start_energy.size(); ++neutron_i){
@@ -516,8 +558,19 @@ void TruthNeutronCaptures_v2::PrintBranches(){
 					 <<std::endl;
 			total_gammas++;
 		}
+		std::cout<<"\t\tnum internal conversion electrons from this neutron: "
+				 <<out_electron_energy.at(neutron_i).size()<<std::endl;
+		for(int electron_i=0; electron_i<out_electron_energy.at(neutron_i).size(); ++electron_i){
+			std::cout<<"\t\tgamma "<<electron_i<<": "<<std::endl
+					 <<"\t\t\tgamma energy [MeV]: "<<out_electron_energy.at(neutron_i).at(electron_i)
+					 <<std::endl
+					 <<"\t\t\tgamma time [ns]: "<<out_electron_time.at(neutron_i).at(electron_i)
+					 <<std::endl;
+			total_electrons++;
+		}
 	}
 	std::cout<<"total gammas in event: "<<total_gammas<<std::endl;
+	std::cout<<"total conversion electrons in event: "<<total_electrons<<std::endl;
 	std::cout<<"==========================================================="<<std::endl;
 }
 

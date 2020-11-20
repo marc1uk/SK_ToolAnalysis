@@ -1,5 +1,5 @@
 /* vim:set noexpandtab tabstop=4 wrap */
-#include "TruthNeutronCaptures.h"
+#include "TruthNeutronCaptures_v3.h"
 #include "Algorithms.h"
 #include "Constants.h"
 #include "type_name_as_string.h"
@@ -12,12 +12,12 @@
 #include "TVector3.h"
 #include "TLorentzVector.h"
 
-TruthNeutronCaptures::TruthNeutronCaptures():Tool(){
+TruthNeutronCaptures_v3::TruthNeutronCaptures_v3():Tool(){
 	// get the name of the tool from its class name
 	toolName=type_name<decltype(this)>(); toolName.pop_back();
 }
 
-bool TruthNeutronCaptures::Initialise(std::string configfile, DataModel &data){
+bool TruthNeutronCaptures_v3::Initialise(std::string configfile, DataModel &data){
 	
 	if(configfile!="")  m_variables.Initialise(configfile);
 	//m_variables.Print();
@@ -47,9 +47,10 @@ bool TruthNeutronCaptures::Initialise(std::string configfile, DataModel &data){
 	
 	// open the input TFile and TTree
 	// ------------------------------
-	get_ok = myTreeReader.Load(inputFile, "h1"); // official ntuple TTree is descriptively known as 'h1'
+	get_ok = myTreeReader.Load(inputFile, "data"); // official ntuple TTree is descriptively known as 'h1'
 	DisableUnusedBranches();
-	if(get_ok) ReadEntryNtuple(0);
+	entry_number = 0;
+	if(get_ok) ReadEntryNtuple(entry_number);
 	
 	// create the output TFile and TTree
 	// ---------------------------------
@@ -58,24 +59,32 @@ bool TruthNeutronCaptures::Initialise(std::string configfile, DataModel &data){
 	return true;
 }
 
-bool TruthNeutronCaptures::Execute(){
+bool TruthNeutronCaptures_v3::Execute(){
 	
-	Log(toolName+" processing entry "+toString(entry_number),v_debug,verbosity);
-	
-	// clear output vectors so we don't carry anything over
-	Log(toolName+" clearing output vectors",v_debug,verbosity);
-	ClearOutputTreeBranches();
-	
-	// Copy over directly transferred variables
-	Log(toolName+" copying output variables",v_debug,verbosity);
-	CopyVariables();
-	
-	// Calculate derived variables
-	Log(toolName+" calculating output variables",v_debug,verbosity);
-	CalculateVariables();
-	
-	// print the current event
-	if(verbosity>1) PrintBranches();
+	// enclose processing in a try-catch loop: we must catch any thrown errors
+	// to prevent the tool crashing out, so that we always pre-load the next entry.
+	// otherwise we'll just try to re-process it next Execute() and crash again!
+	try {
+		Log(toolName+" processing entry "+toString(entry_number),v_debug,verbosity);
+		
+		// clear output vectors so we don't carry anything over
+		Log(toolName+" clearing output vectors",v_debug,verbosity);
+		ClearOutputTreeBranches();
+		
+		// Copy over directly transferred variables
+		Log(toolName+" copying output variables",v_debug,verbosity);
+		CopyVariables();
+		
+		// Calculate derived variables
+		Log(toolName+" calculating output variables",v_debug,verbosity);
+		CalculateVariables();
+		
+		// print the current event
+		if(verbosity>1) PrintBranches();
+		
+	} catch (...){
+		Log(toolName+" ERROR PROCESSING ENTRY "+toString(entry_number),v_error,verbosity);
+	}
 	
 	// Fill the output tree
 	Log(toolName+" filling output TTree entry",v_debug,verbosity);
@@ -111,7 +120,7 @@ bool TruthNeutronCaptures::Execute(){
 }
 
 
-bool TruthNeutronCaptures::Finalise(){
+bool TruthNeutronCaptures_v3::Finalise(){
 	
 	// ensure everything is written to the output file
 	// -----------------------------------------------
@@ -127,7 +136,7 @@ bool TruthNeutronCaptures::Finalise(){
 	return true;
 }
 
-void TruthNeutronCaptures::CopyVariables(){
+void TruthNeutronCaptures_v3::CopyVariables(){
 	// copy over variables from the input tree
 	// ---------------------------------------
 	// those we want to keep in the output tree without modification
@@ -146,7 +155,7 @@ void TruthNeutronCaptures::CopyVariables(){
 	
 }
 
-int TruthNeutronCaptures::CalculateVariables(){
+int TruthNeutronCaptures_v3::CalculateVariables(){
 	// calculate remaining variables
 	// -----------------------------
 	// those we want to save to the output tree but need to derive
@@ -185,15 +194,18 @@ int TruthNeutronCaptures::CalculateVariables(){
 	// loop over the primary particles first, because for IBD events we have a primary neutron
 	Log(toolName+" event had "+toString(n_outgoing_primaries)+" primary particles",v_debug,verbosity);
 	for(int primary_i=0; primary_i<n_outgoing_primaries; ++primary_i){
-		Log(toolName+" primary "+toString(primary_i)+" had G3 code "+toString((int)primary_G3_code.at(primary_i))
-				+" ("+G3ParticleCodeToString(primary_G3_code.at(primary_i))+")",v_debug,verbosity);
-		if(primary_G3_code.at(primary_i)==neutron_g3){
+		Log(toolName+" primary "+toString(primary_i)+" had PDG code "+toString((int)primary_PDG_code.at(primary_i))
+				+" ("+PdgToString(primary_PDG_code.at(primary_i))+")",v_debug,verbosity);
+		if(primary_PDG_code.at(primary_i)==neutron_pdg){
 			// we found a neutron!
 			Log(toolName+" NEUTRON!", v_debug,verbosity);
 			primary_n_ind_to_loc.emplace(primary_i,out_neutron_start_energy.size());
 			// note neutron info
 			out_neutron_start_pos.push_back(primary_vertex_tvector);
-			double startE = primary_start_mom.at(primary_i);
+			TVector3 start_mom( primary_start_mom.at(primary_i).at(0),
+								primary_start_mom.at(primary_i).at(1),
+								primary_start_mom.at(primary_i).at(2));
+			double startE = start_mom.Mag();
 			// FIXME primary momenta appear to be in different units to secondaries...? Need to convert to MeV
 			out_neutron_start_energy.push_back(startE);
 			out_neutron_ndaughters.push_back(0);  // XXX which branch???
@@ -229,7 +241,7 @@ int TruthNeutronCaptures::CalculateVariables(){
 				+" ("+PdgToString(secondary_PDG_code_2.at(secondary_i))+")",v_debug,verbosity);
 		if(secondary_PDG_code_2.at(secondary_i)==neutron_pdg){
 			// we found a neutron!
-			Log(toolName+" NEUTRON!", v_debug,verbosity);
+			Log(toolName+" NEUTRON! at "+toString(secondary_i), v_debug,verbosity);
 			secondary_n_ind_to_loc.emplace(secondary_i,out_neutron_start_energy.size());
 			// note neutron info
 			TLorentzVector startpos(secondary_start_vertex_2.at(secondary_i).at(0),
@@ -295,15 +307,19 @@ int TruthNeutronCaptures::CalculateVariables(){
 			// parent may either be a primary particle or secondary particle
 			// sanity check: it should have one or the other, but not both
 			int neutron_parent_loc = -1;
-			int primary_parent_index = parent_trackid.at(secondary_i);
+			// XXX HACK: for now it seems as though primary indices (iprntidx) are not stored,
+			// but secondary indices (iprnttrk) actually hold index of the primary parent...
+			// this seems broken??? XXX CRAP WORKAROUND SWAP 0 INDEX?
+			int primary_parent_index = 0; // parent_trackid.at(secondary_i); - not saved, presume 0
 			int secondary_parent_index = parent_index.at(secondary_i);
+			if(secondary_parent_index==0) secondary_parent_index=-1; // is it correct for >0??? do we need -1??
 			Log(toolName+" primary parent index "+toString(primary_parent_index)
 						+" secondary parent index "+toString(secondary_parent_index),v_debug,verbosity);
 			// first check if it has a valid SECONDARY parent
-			if(secondary_parent_index>0){
+			if(secondary_parent_index>=0){
 				// its parent was a secondary: check if it's in our list of secondary neutrons
-				if(secondary_n_ind_to_loc.count(secondary_parent_index-1)){ // -1 as indices are 1-based
-					neutron_parent_loc = secondary_n_ind_to_loc.at(secondary_parent_index-1);
+				if(secondary_n_ind_to_loc.count(secondary_parent_index)){
+					neutron_parent_loc = secondary_n_ind_to_loc.at(secondary_parent_index);
 				}
 				// else its parent was a secondary, but not one we know
 				else if(from_ncapture){
@@ -316,15 +332,15 @@ int TruthNeutronCaptures::CalculateVariables(){
 			// only fall-back to getting parent PRIMARY if parent secondary index = 0
 			// this is because parent primary index is carried over, so daughters of secondaries
 			// will have the same primary parent index
-			else if(primary_parent_index>0){
+			else if(primary_parent_index>=0){
 				// its parent was a primary: check if it's in our list of primary neutrons
-				if(primary_n_ind_to_loc.count(primary_parent_index-1)){  // -1 as indices are 1-based
-					neutron_parent_loc = primary_n_ind_to_loc.at(primary_parent_index-1);
+				if(primary_n_ind_to_loc.count(primary_parent_index)){
+					neutron_parent_loc = primary_n_ind_to_loc.at(primary_parent_index);
 				}
 				// else its parent was a primary, but not one we know
 				else if(from_ncapture){
 					// if it came from ncapture of a primary neutron, why don't we know about that neutron?
-					Log(toolName+"WARNING, GAMMA FROM NCAPTURE WITH UNKNOWN PRIMARY PARENT INDEX "
+					Log(toolName+" WARNING, GAMMA FROM NCAPTURE WITH UNKNOWN PRIMARY PARENT INDEX "
 							 +toString(primary_parent_index),v_warning,verbosity);
 					continue;
 				}
@@ -364,9 +380,10 @@ int TruthNeutronCaptures::CalculateVariables(){
 					
 					// double check - for primary neutrons we assume the neutron start pos is
 					// the primary event vertex. Compare with the "parent position at creation"
-					TVector3 parent_neutron_start_pos(parent_init_pos.at(secondary_i).at(0),
-													  parent_init_pos.at(secondary_i).at(1),
-													  parent_init_pos.at(secondary_i).at(2));
+					// XXX HACK: /10 for agreeable units... but which is correct?
+					TVector3 parent_neutron_start_pos(parent_init_pos.at(secondary_i).at(0)/10.,
+													  parent_init_pos.at(secondary_i).at(1)/10.,
+													  parent_init_pos.at(secondary_i).at(2)/10.);
 					if(parent_neutron_start_pos!=out_neutron_start_pos.at(neutron_parent_loc).Vect()){
 						std::cout<<"WARNING, NEUTRON START LOC FROM PARENT POSITION AT BIRTH ("
 								 <<parent_neutron_start_pos.X()<<", "<<parent_neutron_start_pos.Y()
@@ -414,15 +431,19 @@ int TruthNeutronCaptures::CalculateVariables(){
 			// parent may either be a primary particle or secondary particle
 			// sanity check: it should have one or the other, but not both
 			int neutron_parent_loc = -1;
-			int primary_parent_index = parent_trackid.at(secondary_i);
+			// XXX HACK: for now it seems as though primary indices (iprntidx) are not stored,
+			// but secondary indices (iprnttrk) actually hold index of the primary parent...
+			// this seems broken??? XXX CRAP WORKAROUND SWAP 0 INDEX?
+			int primary_parent_index = 0; // parent_trackid.at(secondary_i); - not saved, presume 0
 			int secondary_parent_index = parent_index.at(secondary_i);
+			if(secondary_parent_index==0) secondary_parent_index=-1; // is it correct for >0??? do we need -1??
 			Log(toolName+" primary parent index "+toString(primary_parent_index)
 						+" secondary parent index "+toString(secondary_parent_index),v_debug,verbosity);
 			// first check if it has a valid SECONDARY parent
-			if(secondary_parent_index>0){
+			if(secondary_parent_index>=0){  // SKG4 doesn't use fortran indexing, it's 0-based afaict
 				// its parent was a secondary: check if it's in our list of secondary neutrons
-				if(secondary_n_ind_to_loc.count(secondary_parent_index-1)){ // -1 as indices are 1-based
-					neutron_parent_loc = secondary_n_ind_to_loc.at(secondary_parent_index-1);
+				if(secondary_n_ind_to_loc.count(secondary_parent_index)){
+					neutron_parent_loc = secondary_n_ind_to_loc.at(secondary_parent_index);
 				}
 				// else its parent was a secondary, but not one we know
 				else {
@@ -435,10 +456,10 @@ int TruthNeutronCaptures::CalculateVariables(){
 			// only fall-back to getting parent PRIMARY if parent secondary index = 0
 			// this is because parent primary index is carried over, so daughters of secondaries
 			// will have the same primary parent index
-			else if(primary_parent_index>0){
+			else if(primary_parent_index>=0){  // it seems SKG4 doesn't populate this...
 				// its parent was a primary: check if it's in our list of primary neutrons
-				if(primary_n_ind_to_loc.count(primary_parent_index-1)){  // -1 as indices are 1-based
-					neutron_parent_loc = primary_n_ind_to_loc.at(primary_parent_index-1);
+				if(primary_n_ind_to_loc.count(primary_parent_index)){
+					neutron_parent_loc = primary_n_ind_to_loc.at(primary_parent_index);
 				}
 				// else its parent was a primary, but not one we know
 				else {
@@ -477,9 +498,10 @@ int TruthNeutronCaptures::CalculateVariables(){
 					
 					// double check - for primary neutrons we assume the neutron start pos is
 					// the primary event vertex. Compare with the "parent position at creation"
-					TVector3 parent_neutron_start_pos(parent_init_pos.at(secondary_i).at(0),
-													  parent_init_pos.at(secondary_i).at(1),
-													  parent_init_pos.at(secondary_i).at(2));
+					// XXX HACK: /10 for agreeable units... but which is correct?
+					TVector3 parent_neutron_start_pos(parent_init_pos.at(secondary_i).at(0)/10.,
+													  parent_init_pos.at(secondary_i).at(1)/10.,
+													  parent_init_pos.at(secondary_i).at(2)/10.);
 					if(parent_neutron_start_pos!=out_neutron_start_pos.at(neutron_parent_loc).Vect()){
 						std::cout<<"WARNING, NEUTRON START LOC FROM PARENT POSITION AT BIRTH ("
 								 <<parent_neutron_start_pos.X()<<", "<<parent_neutron_start_pos.Y()
@@ -523,11 +545,15 @@ int TruthNeutronCaptures::CalculateVariables(){
 			// but came from neutron capture it's the daughter nuclide
 			// its parent will also be the captured neutron, same as the decay gamma.
 			int neutron_parent_loc=-1;
-			int primary_parent_index = parent_trackid.at(secondary_i);
+			// XXX HACK: for now it seems as though primary indices (iprntidx) are not stored,
+			// but secondary indices (iprnttrk) actually hold index of the primary parent...
+			// this seems broken??? XXX CRAP WORKAROUND SWAP 0 INDEX?
+			int primary_parent_index = 0; // parent_trackid.at(secondary_i); - not saved, presume 0
 			int secondary_parent_index = parent_index.at(secondary_i);
-			if(secondary_parent_index>0){
-				if(secondary_n_ind_to_loc.count(secondary_parent_index-1)){ // -1 as indices are 1-based
-					neutron_parent_loc = secondary_n_ind_to_loc.at(secondary_parent_index-1);
+			if(secondary_parent_index==0) secondary_parent_index=-1; // is it correct for >0??? do we need -1??
+			if(secondary_parent_index>=0){
+				if(secondary_n_ind_to_loc.count(secondary_parent_index)){
+					neutron_parent_loc = secondary_n_ind_to_loc.at(secondary_parent_index);
 				} else {
 					// came from capture of a neutron we don't know?
 					Log(toolName+" WARNING, "+PdgToString(secondary_PDG_code_2.at(secondary_i))
@@ -535,9 +561,9 @@ int TruthNeutronCaptures::CalculateVariables(){
 							+toString(secondary_parent_index),v_warning,verbosity);
 					continue;
 				}
-			} else if(primary_parent_index>0){
-				if(primary_n_ind_to_loc.count(primary_parent_index-1)){  // -1 as indices are 1-based
-					neutron_parent_loc = primary_n_ind_to_loc.at(primary_parent_index-1);
+			} else if(primary_parent_index>=0){
+				if(primary_n_ind_to_loc.count(primary_parent_index)){
+					neutron_parent_loc = primary_n_ind_to_loc.at(primary_parent_index);
 				} else {
 					// came from capture of a neutron we don't know?
 					Log(toolName+" WARNING, "+PdgToString(secondary_PDG_code_2.at(secondary_i))
@@ -572,16 +598,11 @@ int TruthNeutronCaptures::CalculateVariables(){
 	
 	// record all primaries...? do we need this info?
 	for(int primary_i=0; primary_i<n_outgoing_primaries; ++primary_i){
-		int primary_pdg_code = G3ParticleCodeToPdg(primary_G3_code.at(primary_i));
-		out_primary_pdg.push_back(primary_pdg_code);
-		double mom_sq = pow(primary_start_mom.at(primary_i),2.);
-		double mass = PdgToMass(primary_pdg_code);
-		mass = (mass==0) ? 1 : mass;
-		out_primary_energy.push_back(primary_start_mom.at(primary_i));
-		TVector3 start_mom_dir(primary_start_mom_dir.at(primary_i).at(0),
-							   primary_start_mom_dir.at(primary_i).at(1),
-							   primary_start_mom_dir.at(primary_i).at(2));
-		TVector3 start_mom = primary_start_mom.at(primary_i)*start_mom_dir.Unit();
+		out_primary_pdg.push_back(primary_PDG_code.at(primary_i));
+		TVector3 start_mom( primary_start_mom.at(primary_i).at(0),
+							primary_start_mom.at(primary_i).at(1),
+							primary_start_mom.at(primary_i).at(2));
+		out_primary_energy.push_back(start_mom.Mag());
 		out_primary_start_mom.push_back(start_mom);
 		out_primary_start_pos.push_back(primary_vertex_tvector); // not sure about the validity of this
 		out_primary_end_pos.push_back(TLorentzVector(0,0,0,0)); // need to get this from a daughter
@@ -590,138 +611,78 @@ int TruthNeutronCaptures::CalculateVariables(){
 	return 1;
 }
 
-int TruthNeutronCaptures::ReadEntryNtuple(long entry_number){
+int TruthNeutronCaptures_v3::ReadEntryNtuple(long entry_number){
 	int bytesread = myTreeReader.GetEntry(entry_number);
 	if(bytesread<=0) return bytesread;
 	
-	int success = 
-	// file level
+	int success = (myTreeReader.GetBranchValue("SECONDARY",sec_info)) &&
+				  (myTreeReader.GetBranchValue("MC",mc_info));
+	
+	// Print method should have been const-qualified. Hack around it.
+	//MCInfo* mci = const_cast<MCInfo*>(mc_info);
+	//mci->Print();
+	
+	// file level - get these from MCInfo / other SKROOT classes
 	// simulation version?
-	(myTreeReader.GetBranchValue("wlen",water_transparency)) &&  // [cm]
+	// water transparency?
 	
 	// event meta info
-	(myTreeReader.GetBranchValue("nrun",run_number))         &&
-	(myTreeReader.GetBranchValue("nsub",subrun_number))      &&
-	(myTreeReader.GetBranchValue("nev",event_number))        &&
-	(myTreeReader.GetBranchValue("nsube",subevent_number))   &&  // how does this relate to after trigger?
-//	(myTreeReader.GetBranchValue("date",event_date))         &&  // [year,month,day]
-//	(myTreeReader.GetBranchValue("time",time))               &&  // [hour,minute,second,?]
+	// is more of this info in the mcninfo[] array? Or those other acronym members of mcinfo?
+	run_number = mc_info->mcrun;
+	// subrun_number
+	// event_number
+	// subevent_number
 	
 	// event level detector info
-	(myTreeReader.GetBranchValue("nhit",N_hit_ID_PMTs))      &&  // "nqisk"
-	(myTreeReader.GetBranchValue("potot",total_ID_pes))      &&  // "qismsk"
-	(myTreeReader.GetBranchValue("pomax",max_ID_PMT_pes))    &&  // "qimxsk", presumably max # PEs from an ID PMT?
+	// N_hit_ID_PMTs
+	// total_ID_pes
+	// max_ID_PMT_pes
 	
-	// numnu is 0 even when npar is >3...
-//	// neutrino interaction info - first primaries array includes neutrino and target (index 0 and 1)
-//	(myTreeReader.GetBranchValue("mode",nu_intx_mode))       &&  // see neut_mode_to_string(mode)
-//	(myTreeReader.GetBranchValue("numnu",tot_n_primaries))   &&  // both ingoing and outgoing
-//	
-//	// following are arrays of size numnu
-//	(myTreeReader.GetBranchValue("ipnu",primary_pdg))        &&  // see constants::numnu_code_to_string
-//	(myTreeReader.GetBranchValue("pnu",primary_momentum))    &&  // [GeV/c]
-	
-	// primary event - second primaries array includes more info
-	(myTreeReader.GetBranchValue("posv",primary_event_vertex))          &&  // [cm]
-//	(myTreeReader.GetBranchValue("wallv",primary_event_dist_from_wall)) &&  // [cm]
-	(myTreeReader.GetBranchValue("npar",n_outgoing_primaries))          &&  // should be (tot_n_primaries - 2)?
+	// primary event - Harada-san does not store the primary arrays from the ATMPD-format files
+	// (npar, posv, ipv, pmomv), but this information should be available from the MCInfo class.
+	// in fact, we have more information here (i think) as we have all the primary vertices,
+	// whereas the ATMPD format only seems to store one primary vertex (posv).
+	n_outgoing_primaries = mc_info->nvc;    //    (npar)
+	// since the tool only supports one primary vertex, take the first for now
+	primary_event_vertex = basic_array<float>(intptr_t(mc_info->pvtxvc[0]),3); // (posv)
 	
 	// following are arrays of size npar
-	(myTreeReader.GetBranchValue("ipv",primary_G3_code))                &&  // see constants::g3_to_pdg
-	(myTreeReader.GetBranchValue("dirv",primary_start_mom_dir))         &&  // 
-	(myTreeReader.GetBranchValue("pmomv",primary_start_mom))            &&  // [units?]
-	
-//	// secondaries - first secondaries arrays...
-//	(myTreeReader.GetBranchValue("npar2",n_secondaries_1))              &&
-	// npar2 is 0 even when nscndprt is not???
-//	
-//	// following are arrays of size npar2
-//	(myTreeReader.GetBranchValue("ipv2",secondary_G3_code_1))                &&  // 
-//	(myTreeReader.GetBranchValue("posv2",secondary_start_vertex_1))          &&  // [cm?] what about time?
-//	(myTreeReader.GetBranchValue("wallv2",secondary_start_dist_from_wall_1)) &&  // [cm?]
-//	(myTreeReader.GetBranchValue("pmomv2",secondary_start_mom_1))            &&  // [units?]
-//	(myTreeReader.GetBranchValue("iorg",secondary_origin_1))                 &&  // what is "origin"?
+	primary_PDG_code = basic_array<int*>(intptr_t(mc_info->ipvc),n_outgoing_primaries);  // (ipv)
+	// MCInfo stores the primary momentum vector, not a separate magnitude and unit direction.
+	// the tool has been modified to account for it, hence differences compared to TruthNeutronCaptures.cc
+	primary_start_mom = basic_array<float(*)[3]>(intptr_t(mc_info->pvc),n_outgoing_primaries);    // (pmomv)
 	
 	// secondaries - second secondaries array...
-	(myTreeReader.GetBranchValue("nscndprt",n_secondaries_2))          &&
+	n_secondaries_2 = sec_info->nscndprt;
 	
 	// following are arrays of size nscndprt
-	(myTreeReader.GetBranchValue("iprtscnd",secondary_PDG_code_2))     &&  //
-	(myTreeReader.GetBranchValue("vtxscnd",secondary_start_vertex_2))  &&  // [units?]
-	(myTreeReader.GetBranchValue("tscnd",secondary_start_time_2))      &&  // [ns]? relative to event start?
-	(myTreeReader.GetBranchValue("pscnd",secondary_start_mom_2))       &&  // [units?]
-	(myTreeReader.GetBranchValue("lmecscnd",secondary_gen_process))    &&  // constants::G3_process_code_to_string
-	(myTreeReader.GetBranchValue("nchilds",secondary_n_daughters))     &&  // 
-	(myTreeReader.GetBranchValue("iprntidx",parent_index))             &&  // if >0, 1-based index in this array
-//	(myTreeReader.GetBranchValue("ichildidx",secondary_first_daugher_index)) &&  // if >0, 1-based index in this
+	secondary_PDG_code_2 = basic_array<int*>(intptr_t(sec_info->iprtscnd),n_secondaries_2);
+	secondary_start_vertex_2 = basic_array<float(*)[3]>(intptr_t(sec_info->vtxscnd),n_secondaries_2);
+	secondary_start_time_2 = basic_array<float*>(intptr_t(sec_info->tscnd),n_secondaries_2);
+	secondary_start_mom_2 = basic_array<float(*)[3]>(intptr_t(sec_info->pscnd),n_secondaries_2);
+	secondary_gen_process = basic_array<int*>(intptr_t(sec_info->lmecscnd),n_secondaries_2);
+	secondary_n_daughters = basic_array<int*>(intptr_t(sec_info->nchilds),n_secondaries_2);
+	parent_index = basic_array<int*>(intptr_t(sec_info->iprntidx),n_secondaries_2);
 	
 	// further parentage information - still arrays of size nscndprt. Useful?
-//	(myTreeReader.GetBranchValue("iprntprt",parent_G3_code))           &&  // or is it a PDG code?
-	(myTreeReader.GetBranchValue("pprnt",parent_mom_at_sec_creation))  &&  // use w/γ to get n energy @ capture
-	(myTreeReader.GetBranchValue("vtxprnt",parent_init_pos))           &&  // [cm?] parent pos @ birth
-	(myTreeReader.GetBranchValue("pprntinit",parent_init_mom))         &&  // [MeV?] parent mom @ birth
-//	(myTreeReader.GetBranchValue("itrkscnd",parent_G3_trackid))        &&  // how do we use this?
-//	(myTreeReader.GetBranchValue("istakscnd",parent_G3_stack_trackid)) &&  // how do we use this?
-	(myTreeReader.GetBranchValue("iprnttrk",parent_trackid));        //&&  // relates secondaries to primaries
-	// NOTE this is carried over to daughters of secondaries, so only use as parent if iprntidx==0
-//	(myTreeReader.GetBranchValue("iorgprt",parent_track_pid_code))     &&  // i'm so confused
-	
-	// XXX for efficiency, add all used branches to DisableUnusedBranches XXX
+	parent_mom_at_sec_creation = basic_array<float(*)[3]>(intptr_t(sec_info->pprnt),n_secondaries_2);
+	parent_init_pos = basic_array<float(*)[3]>(intptr_t(sec_info->vtxprnt),n_secondaries_2);
+	parent_init_mom = basic_array<float(*)[3]>(intptr_t(sec_info->pprntinit),n_secondaries_2);
+	parent_trackid = basic_array<int*>(intptr_t(sec_info->iprnttrk),n_secondaries_2);  // not populated by SKG4
 	
 	return success;
 }
 
-int TruthNeutronCaptures::DisableUnusedBranches(){
+int TruthNeutronCaptures_v3::DisableUnusedBranches(){
 	std::vector<std::string> used_branches{
-		"wlen",
-		"nrun",
-		"nsub",
-		"nev",
-		"nsube",
-//		"date",
-//		"time",
-		"nhit",
-		"potot",
-		"pomax",
-//		"mode",
-//		"numnu",
-//		"ipnu",
-//		"pnu",
-		"posv",
-//		"wallv",
-		"npar",
-		"ipv",
-		"dirv",
-		"pmomv",
-//		"npar2",
-//		"ipv2",
-//		"posv2",
-//		"wallv2",
-//		"pmomv2",
-//		"iorg",
-		"nscndprt",
-		"iprtscnd",
-		"vtxscnd",
-		"tscnd",
-		"pscnd",
-		"lmecscnd",
-		"nchilds",
-		"iprntidx",
-//		"ichildidx",
-//		"iprntprt",
-		"pprnt",
-		"vtxprnt",
-		"pprntinit",
-//		"itrkscnd",
-		"istakscnd",
-		"iprnttrk"  //,
-//		"iorgprt",
+	"MC",
+	"SECONDARY"
 	};
 	
 	return myTreeReader.OnlyEnableBranches(used_branches);
 }
 
-int TruthNeutronCaptures::CreateOutputFile(std::string filename){
+int TruthNeutronCaptures_v3::CreateOutputFile(std::string filename){
 	// create the output ROOT file and TTree for writing
 	// =================================================
 	outfile = new TFile(filename.c_str(), "RECREATE");
@@ -776,7 +737,7 @@ int TruthNeutronCaptures::CreateOutputFile(std::string filename){
 	return 1;
 }
 
-void TruthNeutronCaptures::ClearOutputTreeBranches(){
+void TruthNeutronCaptures_v3::ClearOutputTreeBranches(){
 	// clear any vector branches
 	
 	out_primary_pdg.clear();
@@ -808,7 +769,7 @@ void TruthNeutronCaptures::ClearOutputTreeBranches(){
 	return;
 }
 
-void TruthNeutronCaptures::PrintBranches(){
+void TruthNeutronCaptures_v3::PrintBranches(){
 	std::cout<<"==========================================================="<<std::endl;
 	std::cout<<"PRINTING EVENT"<<std::endl;
 	std::cout<<"filename: "<<out_filename<<std::endl;
@@ -904,7 +865,7 @@ void TruthNeutronCaptures::PrintBranches(){
 	std::cout<<"==========================================================="<<std::endl;
 }
 
-int TruthNeutronCaptures::WriteTree(){
+int TruthNeutronCaptures_v3::WriteTree(){
 	Log(toolName+" writing TTree",v_debug,verbosity);
 	outfile->cd();
 	// TObject::Write returns the total number of bytes written to the file.
@@ -918,7 +879,7 @@ int TruthNeutronCaptures::WriteTree(){
 	return bytes;
 };
 
-void TruthNeutronCaptures::CloseFile(){
+void TruthNeutronCaptures_v3::CloseFile(){
 	outtree->ResetBranchAddresses();
 	// XXX note that while these do persist in the tree:
 	// 1. they can't be used in a loop, since you can't use SetBranchAddress on an Alias.

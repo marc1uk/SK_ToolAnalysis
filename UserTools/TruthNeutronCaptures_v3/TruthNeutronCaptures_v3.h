@@ -1,6 +1,6 @@
 /* vim:set noexpandtab tabstop=4 wrap filetype=cpp */
-#ifndef TruthNeutronCaptures_v2_H
-#define TruthNeutronCaptures_v2_H
+#ifndef TruthNeutronCaptures_v3_H
+#define TruthNeutronCaptures_v3_H
 
 #include <string>
 #include <iostream>
@@ -19,23 +19,24 @@ class TVector3;
 class TLorentzVector;
 
 /**
-* \class TruthNeutronCaptures_v2
+* \class TruthNeutronCaptures_v3
 *
 * A simple tool to plot basic characteristics of neutron captures, reading outputs from skdetsim.
-* 1. checkout and compile modified SKOFL with secondaries added to MCInfo class.
-* 2. compile modified skdetsim with NEUTRON environmental variable defined to enable saving secondaries.
-* 3. run skdetsim with option 'SKCNTL-OUTPUTTYPE 1' and 'SKCNTL-FILEFORMAT 1' to generate SKROOT output.
+* 1. run skdetsim or skdetsim-gd with output option 'SKCNTL-OUTPUTTYPE 2' to generate zbs output file
+* 2. convert the zbs file to an hbk file with `fillnt_simple.sh -o (output hbook file) (input zbs file)`
+* 3. convert the hbk file to a root file with `h2root (input hbook file) (output root file)`
+* This somewhat convoluted process is required to retain information about neutrons and gammas.
 * This file processes the output root files from step 3.
 *
 * $Author: M.O'Flahery $
 * $Date: 2020/08/12 $
 * Contact: marcus.o-flaherty@warwick.ac.uk
 */
-class TruthNeutronCaptures_v2: public Tool {
+class TruthNeutronCaptures_v3: public Tool {
 	
 	public:
 	
-	TruthNeutronCaptures_v2(); ///< Simple constructor
+	TruthNeutronCaptures_v3(); ///< Simple constructor
 	bool Initialise(std::string configfile,DataModel &data); ///< Initialise Function for setting up Tool resorces. @param configfile The path and name of the dynamic configuration file to read in. @param data A reference to the transient data class used to pass information between Tools.
 	bool Execute(); ///< Executre function used to perform Tool purpose.
 	bool Finalise(); ///< Finalise funciton used to clean up resorces.
@@ -59,18 +60,15 @@ class TruthNeutronCaptures_v2: public Tool {
 	int MAX_EVENTS=-1;                          // max n events to process
 	int WRITE_FREQUENCY=10;                     // update output file every N fills
 	
-	// handy constants
-	double neutron_mass;
-	
-	// output file
 	TFile* outfile=nullptr;
 	TTree* outtree=nullptr;
 	
 	// Functions
 	// =========
+	void CopyVariables();
 	int CalculateVariables();
 	int GenerateHistograms();
-	int ReadEntry(long entry_number);
+	int ReadEntryNtuple(long entry_number);
 	int CreateOutputFile(std::string outputFile);
 	void ClearOutputTreeBranches();
 	void PrintBranches();
@@ -85,9 +83,61 @@ class TruthNeutronCaptures_v2: public Tool {
 	// variables to read in
 	// ====================
 	MTreeReader myTreeReader;                                   // the TTree reader
-	const Header   *run_header    = nullptr;
-	const MCInfo   *mc_info       = nullptr;
-	const SecondaryInfo *sec_info = nullptr;
+	
+	const MCInfo* mc_info = nullptr;
+	const SecondaryInfo* sec_info = nullptr;
+	
+	// run meta info
+	//int simulation version??
+	double water_transparency;                                  // [cm]
+	
+	// event meta info
+	int run_number;
+	int subrun_number;
+	int event_number;
+	int subevent_number;
+	
+	// event level detector info
+	int N_hit_ID_PMTs;                                          // "nqisk"
+	int total_ID_pes;                                           // "qismsk"
+	int max_ID_PMT_pes;                                         // "qimxsk", max # PEs from a single ID PMT?
+	
+	// primary event
+	basic_array<float> primary_event_vertex;                    // [cm]
+	float primary_event_dist_from_wall;                         // [cm]
+	int n_outgoing_primaries;                                   // should be (tot_n_primaries - 2)...
+	
+	// following are arrays of size n_outgoing_primaries
+	basic_array<int*> primary_PDG_code;                         // MCInfo stores int pdg codes in ipvc
+	basic_array<float(*)[3]> primary_start_mom;                 // [units?] this and ipv are arrays of size npar
+	
+	// secondaries - first secondaries arrays...
+	int n_secondaries_1;
+	// the following are arrays of size npar2
+	basic_array<int*> secondary_G3_code_1;                      // 
+	basic_array<float(*)[3]> secondary_start_vertex_1;          // array of 3, [cm?] what about time?
+	basic_array<float*> secondary_start_dist_from_wall_1;       // [cm?]
+	basic_array<float(*)[3]> secondary_start_mom_1;             // [units?]
+	basic_array<int*> secondary_origin_1;                       // what is "origin"?
+	
+	// secondaries - second secondaries array...
+	int n_secondaries_2;
+	// the following are arrays of size nscndprt
+	basic_array<int*> secondary_PDG_code_2;                     //
+	basic_array<float(*)[3]> secondary_start_vertex_2;          // [units?]
+	basic_array<float*> secondary_start_time_2;                 // [ns]? relative to event start?
+	basic_array<float(*)[3]> secondary_start_mom_2;             // [units?]
+	basic_array<int*> secondary_gen_process;                    // use constants::G3_process_code_to_string
+	basic_array<int*> secondary_n_daughters;                    // 
+	basic_array<int*> secondary_first_daugher_index;            // if >0, 1-based index in this array
+	basic_array<int*> parent_index;                             // if >0, 1-based index in this array
+	
+	// further parentage information - Useful?
+//	basic_array<int*> parent_G3_code;                           // or is it a PDG code?
+	basic_array<float(*)[3]> parent_mom_at_sec_creation;        // use w/daughter γ to see n energy @ capture
+	basic_array<float(*)[3]> parent_init_pos;                   // [cm?] position of parent @ birth
+	basic_array<float(*)[3]> parent_init_mom;                   // [MeV?] momentum of parent @ birth
+	basic_array<int*> parent_trackid;                           // maybe primary parent index???
 	
 	// variables to write out
 	// ======================
@@ -102,6 +152,7 @@ class TruthNeutronCaptures_v2: public Tool {
 	
 	// event-wise
 	int out_run_number;
+//	int out_subrun_number;
 	int out_entry_number;   // TTree entry number to be able to identify the source event
 	int out_subevent_number;
 	

@@ -1,3 +1,5 @@
 # vim: filetype=Makefile #
-myTruthNeutronCaptures TruthNeutronCaptures_v2 configfiles/TruthNeutronCaptures/TruthNeutronCapturesConfig
+myTruthNeutronCaptures TruthNeutronCaptures_v3 configfiles/TruthNeutronCaptures/TruthNeutronCapturesConfig
+#myTruthNeutronCaptures TruthNeutronCaptures_v2 configfiles/TruthNeutronCaptures/TruthNeutronCapturesConfig
+#myTruthNeutronCaptures TruthNeutronCaptures configfiles/TruthNeutronCaptures/TruthNeutronCapturesConfig
 #test2 DummyTool configfiles/template/DummyToolConfig
