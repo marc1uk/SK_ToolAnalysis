@@ -1,1 +1,3 @@
-myPureWaterLi9Rate PurewaterLi9Rate configfiles/PurewaterLi9/PurewaterLi9RateConfig
+#myPureWaterLi9Rate PurewaterLi9Rate configfiles/PurewaterLi9/PurewaterLi9RateConfig
+myPureWaterLi9Plots PurewaterLi9Plots configfiles/PurewaterLi9/PurewaterLi9PlotsConfig
+myGracefulStop GracefulStop configfiles/PurewaterLi9/GracefulStopConfig

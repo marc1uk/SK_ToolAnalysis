@@ -8,13 +8,13 @@
 
 #include "Algorithms.h"
 #include "MTreeReader.h"
+#include "MTreeSelection.h"
 #include "SkrootHeaders.h"    // MCInfo, Header etc.
 #include "thirdredvars.h"     // ThirdRed class
 
-#include "TSpline.h"
+class TSpline3;
 
 //#include "cut_third.h"
-
 
 /**
 * \class PurewaterLi9Rate
@@ -26,8 +26,6 @@
 * $Date: 2020/12/11 $
 * Contact: marcus.o-flaherty@warwick.ac.uk
 */
-
-enum muboy_classes { misfit=0, single_thru_going=1, single_stopping=2, multiple_mu=3, also_multiple_mu=4, corner_clipper=5};
 
 class PurewaterLi9Rate: public Tool {
 	
@@ -44,18 +42,26 @@ class PurewaterLi9Rate: public Tool {
 	// =============
 	std::string inputFile="";                                   // input file to read
 	MTreeReader myTreeReader;                                   // the TTree reader
+	MTreeSelection myTreeSelections;                            // record what passes what cuts
 	int entry_number=0;                                         // input TTree entry
+	int first_entry=0;                                          // first TTree entry to start from
 	int MAX_ENTRIES=-1;                                         // max num input TTree entries to process
-	std::string outputFile="li9_analysis.root";                 // output file to write
+	std::string outputFile="li9_cuts.root";                     // output file to write
+	
+	// these are unused
 	TFile* outfile=nullptr;                                     // the output TFile
 	TTree* outtree=nullptr;                                     // the output TTree
 	int WRITE_FREQUENCY=10;                                     // update output tree every N fills
 	
 	// cut configurations
 	// ==================
+	int run_min=0;
+	int run_max=0;
 	float max_closest_muon_dt=0.001;  // 1ms
 	float max_closest_lowe_dx=490;    // 490cm
 	float ntag_FOM_threshold=0.95;    // BDT FOM threshold for Li9 ntagging
+	float li9_lifetime_dtmin;         // range of dt_mu_lowe values to accept
+	float li9_lifetime_dtmax;         // for Li9 candidates, [us]
 	// ROC curve reading for ntag
 //	TSpline3 *sig=nullptr;       // TODO for BDT efficiency
 //	TSpline3 *sigsys=nullptr;    // TODO for BDT efficiency
@@ -105,6 +111,7 @@ class PurewaterLi9Rate: public Tool {
 	
 	// variables to write out
 	// ======================
+	// output is handled by the MTreeSelection
 	
 	// calculation variables
 	// =====================
@@ -116,39 +123,18 @@ class PurewaterLi9Rate: public Tool {
 	int nspatot=0; // sonia's count of li9 candidates before ntag
 	std::vector<float> dtimes_li9_ncap;  // sonia's li9 ncapture times
 	
-	// maps of muboy class vs a histogram of mu->lowe time and transverse distance
-	std::map<int,TH1F*> dlt_hists_pre;
-	std::map<int,TH1F*> dt_hists_pre;
-	std::map<int,TH1F*> dlt_hists_post;
-	std::map<int,TH1F*> dt_hists_post;
-	
-	// varying muon->lowe dt thresholds for assessing systematic of dlt cut
-	std::map<float, TH1F*> dlt_systematic_dt_cuts_pre;
-	std::map<float, TH1F*> dlt_systematic_dt_cuts_post;
-	// key is dt cut, value is the dlt distribution
-	// for a given dt cut, the difference between values gives the distribution of *spallation* dlt.
-	// across the various dt cuts, the difference between spallation dlt distributions gives
-	// the systematic error in dlt cut efficiency.
-	// We're particularly interested in the variation in the bin corresponding to cut value of dlt=200cm,
-	// so make sure we have a bin edge at that value
-	
-	// distribution of all muon->lowe times, after dlt cut, to extract rates of isotopes
-	TH1F* dt_mu_lowe_hist=nullptr;
-	TH1F* li9_ntag_dt_hist=nullptr;
-	TH1F* li9_muon_dt_hist=nullptr;
-	TH1F* li9_e_hist=nullptr;
-	
-	// track num events passing cuts.
-	std::map<std::string, uint64_t> cut_tracker;
+	std::vector<float> spall_lifetimes;
 	
 	// functions
 	// =========
 	// input
 	int DisableUnusedBranches();                                // disable unused branches to speed up reading input
 	int ReadEntryNtuple(long entry_number);                     // get next entry from TreeReader
-	// output
+	
+	// output - these are currently redundant, output is handled by the MTreeSelection
 	int CreateOutputFile(std::string outputFile);               // create output TFile and TTree
-	void ClearOutputTreeBranches();                             // clear output branch containers between events
+	int FillTree();                                             // fill output TTree entries
+	void ClearOutputTreeBranches();                             // reset containers to prevent carry-over
 	int WriteTree();                                            // update output TFile
 	void CloseFile();                                           // close output TFile
 	
@@ -158,12 +144,7 @@ class PurewaterLi9Rate: public Tool {
 	bool apply_third_reduction(const ThirdRed *th, const LoweInfo *LOWE);
 	bool Analyse();        // main body
 	bool SoniasAnalyse();  // translation of sonia's set of cuts
-//	void PlotSpallationDtDlt();  // TODO
-//	void MeasureDltSystematic(); // TODO
-//	void MeasureIsotopeRates();  // TODO
-	void IncrementEventCount(std::string cutname);
 	
-	//int GenerateHistograms();
 	//void PrintBranches();                                     // print an output event, for debug
 	
 	// standard tool stuff
@@ -178,6 +159,14 @@ class PurewaterLi9Rate: public Tool {
 	std::string logmessage="";
 	int get_ok=0;
 	
+	// for testing performance
+	bool stopping=false;
+	uint64_t num_processed_events=0;
+	std::chrono::high_resolution_clock::time_point toolchain_start;
+	std::chrono::high_resolution_clock::time_point toolchain_end;
+	double loop_times[1000];
+	double analyse_times[1000];
+	int loop_i=0;
 };
 
 

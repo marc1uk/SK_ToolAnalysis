@@ -2,9 +2,21 @@ verbosity 1
 #inputFile /host/software/relic_sk4_ana/li9/subsetfile.root
 #outputFile /host/software/relic_sk4_ana/li9/li9_results.root
 inputFile /disk02/lowe8/relic_sk4/dec20/data/for_ntag/spall_resq_oldbdt_nlow1/relic.precut.leaf.ntag_oldbdt_nlow1.spall_new_resq.061525.077958.root
-outputFile li9_selections.root
+cutFile li9_selections.root
+outputFile li9_results.root
 maxEntries -1                   # max num input entries to process
-writeFrequency 100              # update output file after this many entries
+writeFrequency 50               # update output file after this many entries
+
+#valuesFileMode write            # read/write values to plot/fit to a BoostStore file (empty to do neither)
+valuesFileMode read            # read/write values to plot/fit to a BoostStore file (empty to do neither)
+valuesFile li9_values.bs        # BoostStore file to read or write
+
+# The cut file may record the events passing many different cuts.
+# Similarly, we may want to make plots with values at various stages of selection.
+# e.g. after cut A, and after cut C. To read the fewest entries possible,
+# we should only load TTree entries for events passing the loosest cut
+# we need to see every event from (i.e. the loosest cut we want to make plots about)
+topCutName lowe_energy>6MeV
 
 max_closest_muon_dt 0.001       # seconds. 'cut_1ms'   in sonia's code
 max_closest_lowe_dx 490         # cm       'cut_multi' in sonia's code

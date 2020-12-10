@@ -13,6 +13,7 @@
 #include <fstream>   // for ofstream
 
 #include "basic_array.h"
+#include "OutputRedirector.h"   // for CStdoutRedirector
 
 class TVector3;
 class TLorentzVector;
@@ -24,6 +25,8 @@ double MomentumToEnergy(basic_array<float[3]>& mom, int pdg);
 double MomentumToEnergy(TVector3& mom, int pdg);
 double Mag2(basic_array<float>& mom);
 double Mag(basic_array<float>& mom);
+bool CheckPath(std::string path, std::string& type);
+std::string ToLower(std::string astring);
 
 // a header/trailer for trying to capture error messages for calls to functions
 // that do not return any error code, but do print to stderr on error.
@@ -85,6 +88,78 @@ void printVals(T &container, int messagelevel, int verbosity, std::string preamb
 	outputbuf<<preamble<<" {";
 	for(auto it=container.begin(); it!=container.end(); ++it){ outputbuf<<(*it); }
 	outputbuf<<"} "<<postamble<<std::endl;
+}
+
+//// https://stackoverflow.com/a/16111317
+//// version that takes no arguments
+//template<typename FunctionType>
+//std::string getOutputFromFunctionCall(FunctionType&& FunctionToCall){
+//	std::cout<<"version with no args"<<std::endl;
+//	// set up capturing of stdout, capturing their current nominal outputs
+//	std::stringbuf tempbuf;
+//	std::streambuf* nominal_stdout_bufferp = std::cout.rdbuf(&tempbuf);
+//	std::streambuf* nominal_stderr_bufferp = std::cerr.rdbuf(&tempbuf);
+//	std::streambuf* nominal_stdlog_bufferp = std::clog.rdbuf(&tempbuf);
+//	std::cout<<"redirected stream test"<<std::endl;
+//	// invoke the requested function
+//	std::forward<FunctionType>(FunctionToCall)();
+//	// restore the streams, capturing the intermediate buffer
+//	std::cout.rdbuf(nominal_stdout_bufferp);
+//	std::cerr.rdbuf(nominal_stderr_bufferp);
+//	std::clog.rdbuf(nominal_stdlog_bufferp);
+//	return tempbuf.str();
+//}
+
+//// version that accepts arbitrary arguments?
+//template<typename FunctionType, typename... Rest>
+//std::string getOutputFromFunctionCall(FunctionType&& FunctionToCall, Rest... rest){
+//	std::cout<<"version with args"<<std::endl;
+//	// set up capturing of stdout, capturing their current nominal outputs
+//	std::stringbuf tempbuf;
+//	std::streambuf* nominal_stdout_bufferp = std::cout.rdbuf(&tempbuf);
+//	std::streambuf* nominal_stderr_bufferp = std::cerr.rdbuf(&tempbuf);
+//	std::streambuf* nominal_stdlog_bufferp = std::clog.rdbuf(&tempbuf);
+//	std::cout<<"redirected stream test"<<std::endl;
+//	// invoke the requested function
+//	std::forward<FunctionType>(FunctionToCall)(rest...);
+//	// restore the streams, capturing the intermediate buffer
+//	std::cout.rdbuf(nominal_stdout_bufferp);
+//	std::cerr.rdbuf(nominal_stderr_bufferp);
+//	std::clog.rdbuf(nominal_stdlog_bufferp);
+//	return tempbuf.str();
+//}
+
+// the above versions do not capture ROOT output.
+// that method of redirecting std::cout doesn't capture all output to stdout
+// using https://github.com/zpasternack/Redirector instead
+// version that takes no arguments
+template<typename FunctionType>
+std::string getOutputFromFunctionCall(FunctionType&& FunctionToCall){
+	// set up capturing of stdout, capturing their current nominal outputs
+	CStdoutRedirector theRedirector;
+	theRedirector.StartRedirecting();
+	// invoke the requested function
+	std::forward<FunctionType>(FunctionToCall)();
+	// restore the streams, capturing the intermediate buffer
+	std::string captured_out = theRedirector.GetOutput();
+	theRedirector.ClearOutput();
+	theRedirector.StopRedirecting();
+	return captured_out;
+}
+
+// version that accepts arbitrary arguments?
+template<typename FunctionType, typename... Rest>
+std::string getOutputFromFunctionCall(FunctionType&& FunctionToCall, Rest... rest){
+	// set up capturing of stdout, capturing their current nominal outputs
+	CStdoutRedirector theRedirector;
+	theRedirector.StartRedirecting();
+	// invoke the requested function
+	std::forward<FunctionType>(FunctionToCall)(rest...);
+	// restore the streams, capturing the intermediate buffer
+	std::string captured_out = theRedirector.GetOutput();
+	theRedirector.ClearOutput();
+	theRedirector.StopRedirecting();
+	return captured_out;
 }
 
 #endif

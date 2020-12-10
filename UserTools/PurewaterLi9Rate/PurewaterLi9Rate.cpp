@@ -5,23 +5,16 @@
 #include <iostream>
 #include <map>
 #include <string>
+//#include <cctype> // ::tolower (why is the :: needed???)
+#include <chrono>         // std::chrono::seconds
 
-#include "TTree.h"
-#include "TString.h"
-#include "TChain.h"
-#include "TSystem.h"
-#include "TROOT.h"
-#include "TH1.h"
-#include "TF1.h"
-#include "TH2.h"
-#include "TH3.h"
-#include "TCanvas.h"
-#include "TMath.h"
-#include "TFile.h"
-#include "TAxis.h"
-#include "TStyle.h"
-#include "TRolke.h"
-#include "TMinuit.h"
+//#include "TSystem.h"
+//#include "TROOT.h"
+//#include "TFile.h"
+//#include "TTree.h"
+//#include "TChain.h"
+
+#include "Constants.h" // muboy_classes
 
 PurewaterLi9Rate::PurewaterLi9Rate():Tool(){
 	// get the name of the tool from its class name
@@ -54,6 +47,10 @@ bool PurewaterLi9Rate::Initialise(std::string configfile, DataModel &data){
 	m_variables.Get("bdt_cut_max",bdt_cut_max);
 	m_variables.Get("ntag_FOM_threshold",ntag_FOM_threshold);
 	
+	m_variables.Get("li9_lifetime_dtmin",li9_lifetime_dtmin);
+	m_variables.Get("li9_lifetime_dtmax",li9_lifetime_dtmax);
+	
+	m_variables.Get("first_entry",first_entry);
 	m_variables.Get("run_min",run_min);
 	m_variables.Get("run_max",run_max);
 	
@@ -61,7 +58,8 @@ bool PurewaterLi9Rate::Initialise(std::string configfile, DataModel &data){
 	// ------------------------------
 	get_ok = myTreeReader.Load(inputFile, "data");
 	DisableUnusedBranches();
-	if(get_ok) ReadEntryNtuple(0);
+	entry_number=first_entry;
+	if(get_ok) ReadEntryNtuple(entry_number);
 	
 	// create the output TFile and TTree
 	// ---------------------------------
@@ -72,64 +70,72 @@ bool PurewaterLi9Rate::Initialise(std::string configfile, DataModel &data){
 	// create a vector of BDT FOM cutoffs
 //	make_BDT_bins();                           // TODO enable when implemented
 	
-	// create the histograms to fill
-	// -----------------------------
-	
-	// Spallation and control sample dt and dlt distributions, for each class of muon
-	//  - we search for up to 30s prior, but Fig 2 only plots up to 0.25s! XXX
-	for(int mu_class_i=0; mu_class_i<5; ++mu_class_i){  // we have 5 muboy classifications
-		dlt_hists_pre.emplace(mu_class_i,
-							  new TH1F(TString::Format("dlt_hists_pre_%d",mu_class_i),
-							           "All Pre-Muon to Low-E Transverse Distances",100,0,400));
-		dt_hists_pre.emplace(mu_class_i,
-							  new TH1F(TString::Format("dt_hists_pre_%d",mu_class_i),
-							           "All Pre-Muon to Low-E Time Differences",100,-30,0));
-		dlt_hists_post.emplace(mu_class_i,
-							  new TH1F(TString::Format("dlt_hists_post_%d",mu_class_i),
-							           "All Post-Muon to Low-E Transverse Distances",100,0,400));
-		dt_hists_post.emplace(mu_class_i,
-							  new TH1F(TString::Format("dt_hists_post_%d",mu_class_i),
-							           "All Post Muon to Low-E Time Differences",100,-30,0));
-	}
-	
-	// all spallation passing dlt cut - we search for up to 30s prior, but Fig 2 only plots up to 0.25s! XXX
-	dt_mu_lowe_hist = new TH1F("dt_mu_lowe_hist","Spallation Muon to Low-E Time Differences",100,0,30);
-	
-	// events passing dlt cut, li9 energy and lifetime cuts, and with a tagged neutron passing BDT cut:
-	li9_muon_dt_hist = new TH1F("li9_muon_dt_hist","Muon to Low-E dt for Li9 triplets",100,-30,0);
-	li9_ntag_dt_hist = new TH1F("li9_ntag_dt_hist","Neutron Capture Candidate dt",100,0,550e-6);
-	li9_e_hist = new TH1F("li9_e_hist","Li9 Candidate Beta Energy",100,6,li9_endpoint);
+	// various dt cuts to assess systematics on the dlt cut efficiency
+	// these are assorted lifetimes of N16, Li8, Li9, B12, B13 respectively
+	spall_lifetimes = std::vector<float>{7.13, 0.838, 0.178, 0.0202, 0.0174};
 	
 	// Pre-populate event count tracker with all cuts to get the ordering of reduction right.
 	// FIXME find a better way. Maybe we should split lowe events // mu-lowe pairs // mu-lowe-ntag triplets,
 	// as otherwise it need not be monotonic. Easiest way for now is:
-	// `grep IncrementEventCount UserTools/PurewaterLi9Rate/PurewaterLi9Rate.cpp`
-	// TODO build cut names to reflect actual cuts
-	cut_tracker.emplace("all",0);
-	cut_tracker.emplace("68671<run<73031",0);
-	cut_tracker.emplace("SNR>0.5",0);
-	cut_tracker.emplace("dwall>200cm",0);
-	cut_tracker.emplace("dt_mu_lowe>50us",0);
-//	cut_tracker.emplace("thirdred",0);
-//	cut_tracker.emplace("max_hits_200ns_AFT<50",0);
-//	cut_tracker.emplace("min(dt_mu_lowe)>1ms",0);
-//	cut_tracker.emplace("nearest_other_lowe>490cm",0);
-	cut_tracker.emplace("lowe_energy>6MeV",0);
-	cut_tracker.emplace("mu_lowe_pairs",0);
-	cut_tracker.emplace("muboy_index==0",0);
-	cut_tracker.emplace("dlt_mu_lowe>200cm",0);
-	cut_tracker.emplace("lowe_energy_in_li9_range",0);
-	cut_tracker.emplace("dt_mu_lowe_in_li9_range",0);
-	cut_tracker.emplace("lowest_other_mu_dt>1ms",0);
-	cut_tracker.emplace("ntag_FOM>0.995",0);
-	cut_tracker.emplace("mu_lowe_ntag_triplets",0);
+	// `grep myTreeSelections.IncrementEventCount UserTools/PurewaterLi9Rate/PurewaterLi9Rate.cpp`
+	// TODO build cut names to reflect actual cuts - e.g. "SNR > "+ std::to_string(snr_cut)
+	// HAVE config file specify "active" for all cuts
+	myTreeSelections.SetTreeReader(&myTreeReader);
+	myTreeSelections.MakeOutputFile(outputFile);
+	std::vector<std::pair<std::string, std::vector<std::string>>> cut_names{
+		// cut name						// list of branches whose indices are required to identify this event
+		{"all",							{}},   // order of the branches specified here must match
+		{"68671<run<73031",				{}},   // the order of indices given to AddPassingEvent!
+		{"SNR>0.5",						{}},
+		{"dwall>200cm",					{}},
+		{"dt_mu_lowe>50us",				{}},
+		//{"thirdred",					{}},
+		//{"max_hits_200ns_AFT<50",		{}},
+		//{"min(dt_mu_lowe)>1ms",		{}},
+		//{"nearest_other_lowe>490cm",	{}},
+		{"lowe_energy>6MeV",			{}},
+		{"pre_muon_muboy_i==0",			{"mubitrack"}},
+		{"pre_mu_dt_cut_0",				{"spadt"}},      // # of pre-muons passing dlt cut after different dt cuts
+		{"pre_mu_dt_cut_1",				{"spadt"}},
+		{"pre_mu_dt_cut_2",				{"spadt"}},
+		{"pre_mu_dt_cut_3",				{"spadt"}},
+		{"pre_mu_dt_cut_4",				{"spadt"}},
+		{"post_muon_muboy_i==0",		{"mubitrack"}},
+		{"post_mu_dt_cut_0",			{"spadt"}},      // # of post-muons passing dlt cut after different dt cuts
+		{"post_mu_dt_cut_1",			{"spadt"}},
+		{"post_mu_dt_cut_2",			{"spadt"}},
+		{"post_mu_dt_cut_3",			{"spadt"}},
+		{"post_mu_dt_cut_4",			{"spadt"}},
+		{"mu_lowe_pairs",				{"spadt"}},
+		{"pre-mu_dt<0",					{"spadt"}},
+		{"muboy_index==0",				{"mubitrack"}},
+		{"dlt_mu_lowe>200cm",			{"spadlt"}},
+		{"lowe_energy_in_li9_range",	{}},
+		{"dt_mu_lowe_in_li9_range",		{"spadt"}},
+		{"closest_other_mu_dt>1ms",		{}},
+		{"ntag_FOM>0.995",				{}},              // no ntag index; just require event had 1+ passing ntag
+		{"mu_lowe_ntag_triplets",		{"spadt","dt"}}
+	};
+	for(auto&& acut : cut_names) myTreeSelections.AddCut(acut.first, acut.second);
+	// pass it to downstream tools processing this cut at the same time
+	intptr_t myTreeSelectionsPtr = reinterpret_cast<intptr_t>(&myTreeSelections);
+	m_data->CStore.Set("MTreeSelection",myTreeSelectionsPtr);
+	
+	toolchain_start=std::chrono::high_resolution_clock::now();
 	
 	return true;
 }
 
 bool PurewaterLi9Rate::Execute(){
 	
+	++num_processed_events;
+	auto loop_start = std::chrono::high_resolution_clock::now();
+	
 	Log(toolName+" processing entry "+toString(entry_number),v_debug,verbosity);
+	if((verbosity<v_debug) && ((entry_number%100)==0))
+		Log(toolName+" processing entry "+toString(entry_number),v_message,verbosity);
+	if((verbosity<v_message) && ((entry_number%1000)==0))
+		Log(toolName+" processing entry "+toString(entry_number),v_warning,verbosity);
 	
 	// clear output vectors so we don't carry anything over
 	Log(toolName+" clearing output vectors",v_debug,verbosity);
@@ -137,26 +143,37 @@ bool PurewaterLi9Rate::Execute(){
 	
 	// Do Li9 analysis
 	Log(toolName+" doing analysis",v_debug,verbosity);
+	// time it relative to the tree reading time
+	auto analyse_start = std::chrono::high_resolution_clock::now();
 	Analyse();
+	auto analyse_stop = std::chrono::high_resolution_clock::now();
+	double analyse_duration 
+		= std::chrono::duration_cast<std::chrono::microseconds>(analyse_stop-analyse_start).count();
+	analyse_times[loop_i]=analyse_duration;
+	if(((loop_i+1)%1000)==0){
+		std::cout<<"ana time: "<<std::accumulate(analyse_times,analyse_times+1000,0.)/1000.<<" us"<<std::endl;
+	}
 	
 	// Fill the output tree
-	Log(toolName+" filling output TTree entry",v_debug,verbosity);
-	outtree->Fill();
+	Log(toolName+" filling output TTree entries",v_debug,verbosity);
+	FillTree();
 	
 	// update the output file so we don't lose everything if we crash
 	if((entry_number%WRITE_FREQUENCY)==0) WriteTree();
 	
 	// stop at user-defined limit to the number of events to process
 	++entry_number;
-	if((MAX_ENTRIES>0)&&(entry_number>=MAX_ENTRIES)){
+	if((MAX_ENTRIES>0)&&(entry_number>=(MAX_ENTRIES+first_entry))){
 		Log(toolName+" reached MAX_ENTRIES, setting StopLoop",v_error,verbosity);
 		m_data->vars.Set("StopLoop",1);
+		stopping=true;
 	} else {
 		// Pre-Load next input entry so we can stop the toolchain if we're
 		// about to run off the end of the tree, or if we encounter a read error
 		get_ok = ReadEntryNtuple(entry_number);
 		if(get_ok==0){
 			m_data->vars.Set("StopLoop",1);
+			stopping=true;
 			Log(toolName+" Hit end of input file, stopping loop",v_warning,verbosity);
 		}
 		else if(get_ok==-2){
@@ -169,32 +186,29 @@ bool PurewaterLi9Rate::Execute(){
 		}
 	}
 	
+	if(stopping){
+		toolchain_end=std::chrono::high_resolution_clock::now();
+		double total = std::chrono::duration_cast<std::chrono::seconds>(toolchain_end-toolchain_start).count();
+		std::cout<<"total run time for "<<num_processed_events<<" events was "<<total<<" s"<<std::endl;
+		total = std::chrono::duration_cast<std::chrono::microseconds>(toolchain_end-toolchain_start).count()/num_processed_events;
+		std::cout<<"this implies "<<total<<" us per event"<<std::endl;
+	}
+	
 	return true;
 }
 
 bool PurewaterLi9Rate::Finalise(){
 	
 	Log(toolName+" event counts trace: ",v_warning,verbosity);
-	for(auto&& event_count : cut_tracker){
-		std::cout<<event_count.first<<" : "<<event_count.second<<"\n";
-	}
+	myTreeSelections.PrintCuts();
 	
-	// subtract distribution of post-muons from pre-muons to obtain lt and dt distributions
-//	PlotSpallationDtDlt(); // using dlt_hists_pre and dlt_hists_post  TODO
+	// write out the event numbers that passed each cut
+	myTreeSelections.Write();
 	
-	// measure dlt cut systematic TODO
-//	MeasureDltSystematic(); // using variation in dlt_systematic_dt_cuts in bin corresponding to dlt=200cm
-	// for each entry in dlt_systematic_dt_cuts_pre, dlt_systematic_dt_cuts_post, subtract post from pre.
-	// this gives a set of efficiencies of spallation for varying dts.
-	// compare efficiency across various dts in each dlt bin to get the dlt systematic error.
-	
-	// fit time distribution of muon-lowe pairs with the nominal dlt cut to obtain isotope counts
-//	MeasureIsotopeRates();  // TODO
-	// split into sum of contributions from each isotope by doing piecewise fit to time distribution:
-	// F(t) = sum_i (N_i/τ_i) exp(-dt/τ_i) + const
-	
+	/*
 	// ensure everything is written to the output file
 	// -----------------------------------------------
+	outfile->cd();
 	get_ok = WriteTree();
 	if(not get_ok){
 		Log(toolName+" Error writing output TTree!",v_error,verbosity);
@@ -203,6 +217,7 @@ bool PurewaterLi9Rate::Finalise(){
 	// Close and delete the file handle
 	// --------------------------------
 	CloseFile();
+	*/
 	
 	return true;
 }
@@ -213,49 +228,53 @@ bool PurewaterLi9Rate::Finalise(){
 bool PurewaterLi9Rate::Analyse(){
 	// This gets called for each Execute iteration, to process one lowe event
 	
+	myTreeSelections.AddPassingEvent("all");
 	Log(toolName+" entry "+toString(entry_number)+" run "+toString(HEADER->nrunsk),v_debug,verbosity);
 	
-	IncrementEventCount("all");
+	Log(toolName+" checking run cut",v_debug+1,verbosity);
 	if(HEADER->nrunsk < run_min) return false;    // SHE trigger threshold lowered to 8 MeV
-	if(HEADER->nrunsk > run_max){                // Yang Zhang's time range
+	if(HEADER->nrunsk > run_max){                 // Yang Zhang's time range
 		m_data->vars.Set("StopLoop",1);
+		Log(toolName+" entry "+toString(entry_number)+" run "+toString(HEADER->nrunsk)
+					+" beyond final run number "+toString(run_max)+", stopping ToolChain",v_warning,verbosity);
 		return false;
 	}
 	//if (HEADER->nrunsk > 74781) return false;  // WIT started after this run. What's the significance of this?
-	Log(toolName+" entry "+toString(entry_number)+" run "+toString(HEADER->nrunsk)+" ok",v_debug,verbosity);
-	IncrementEventCount("68671<run<73031");
+	myTreeSelections.AddPassingEvent("68671<run<73031");
 	
 	// find lowe events ✅
 	// for reference, paper says 54,963 beta events... though not clear after which cuts
 	
 	// n_hits_with_Q_lt_0.5pe / n_hits_total > 0.55
+	Log(toolName+" checking SNR cut",v_debug+1,verbosity);
 	if((double)thirdredvars->q50 / (double)(LOWE->bsn50) > 2.) return false;   // is this the right cut? XXX
-	IncrementEventCount("SNR>0.5");
+	myTreeSelections.AddPassingEvent("SNR>0.5");
 	
 	// dwall > 2m
+	Log(toolName+" checking dwall cut",v_debug+1,verbosity);
 	if(thirdredvars->dwall < 200.) return false;
-	IncrementEventCount("dwall>200cm");
+	myTreeSelections.AddPassingEvent("dwall>200cm");
 	
 	// dt_muon_lowe > 50us
-	// check the closest preceding muon. 
+	// check the closest preceding muon.
 	// n.b. if muboy found multiple, they all have the same time, so we don't neeed to scan
-	if(dt_mu_lowe[num_pre_muons-1] < 50e-6) return false;
-	IncrementEventCount("dt_mu_lowe>50us");
-	
-	Log(toolName+" entry "+toString(entry_number)+" passed 1st reduction",v_debug,verbosity);
+	Log(toolName+" checking afterpulsing cut",v_debug+1,verbosity);
+	if(fabs(dt_mu_lowe[num_pre_muons-1]) < 50e-6) return false;
+	myTreeSelections.AddPassingEvent("dt_mu_lowe>50us");
 	
 //	// new set of cuts from atmospheric analysis TODO enable?
+//	Log(toolName+" checking third reduction cuts",v_debug+1,verbosity);
 //	if (apply_third_reduction(third, LOWE)) return false;
-//	Log(toolName+" entry "+toString(entry_number)+" passed 3rd reduction",v_debug,verbosity);
-//	IncrementEventCount("thirdred");
+//	myTreeSelections.AddPassingEvent("thirdred");
 	
 //	// new cut of events with a low energy muon in the ncapture window TODO enable?
+//	Log(toolName+" checking for muons in AFT trigger",v_debug+1,verbosity);
 //	if (max_hits_200ns_AFT > 50) return false;
-//	Log(toolName+" entry "+toString(entry_number)+" passed muon in AFT cut",v_debug,verbosity);
-//	IncrementEventCount("max_hits_200ns_AFT<50");
+//	myTreeSelections.AddPassingEvent("max_hits_200ns_AFT<50");
 	
 //	// new cut of events within 1ms of nearest muon (pre- or post) cut TODO enable?
 //	// how would this work? We're looking for spallation: we want events in proximity to a muon...
+//	Log(toolName+" checking for closest pre-muon >1ms",v_debug+1,verbosity);
 //	bool fail_1ms = false;
 //	for ( int i = 0; i < num_pre_muons; i++ ) {
 //		if ( fabs( dt_mu_lowe[ i ] ) < 0.001 ){
@@ -264,18 +283,17 @@ bool PurewaterLi9Rate::Analyse(){
 //		}
 //	}
 //	if(fail_1ms) return false;
-//	Log(toolName+" entry "+toString(entry_number)+" passed >1ms to nearest pre-muon cut",v_debug,verbosity);
-//	IncrementEventCount("min(dt_mu_lowe)>1ms");
+//	myTreeSelections.AddPassingEvent("min(dt_mu_lowe)>1ms");
 	
 //	// new cut to remove all lowe events in close proximity to another lowe event TODO enable?
-//	if (closest_lowe_60s[0] < max_closest_lowe_dx) return false;    // not applied by Zhang 
-//	Log(toolName+" entry "+toString(entry_number)+" passed >60s to nearest lowe event cut",v_debug,verbosity);
-//	IncrementEventCount("nearest_other_lowe>490cm");
+//	Log(toolName+" checking closest lowe event within 60s",v_debug+1,verbosity);
+//	if (closest_lowe_60s[0] < max_closest_lowe_dx) return false;    // not applied by Zhang
+//	myTreeSelections.AddPassingEvent("nearest_other_lowe>490cm");
 	
 	// cut all lowe events with energy < 6 MeV (mostly non-spallation)
+	Log(toolName+" checking lowe energy > 6 MeV",v_debug+1,verbosity);
 	if( LOWE->bsenergy < 6.f ) return false;
-	Log(toolName+" entry "+toString(entry_number)+" passed LOWE energy >6 MeV cut",v_debug,verbosity);
-	IncrementEventCount("lowe_energy>6MeV");
+	myTreeSelections.AddPassingEvent("lowe_energy>6MeV");
 	
 	// find muons within 30 prior to lowe events ( muons identified by: >1000pe in ID ) ✅
 	// find muons within 30s post lowe events    ( muons identified by: >1000pe in ID ) ✅
@@ -286,29 +304,33 @@ bool PurewaterLi9Rate::Analyse(){
 	Log(toolName+" looping over "+toString(num_pre_muons)+" preceding muons and "+toString(num_post_muons)
 				+" following muons to fill spallation and control dl, dt histograms",v_debug,verbosity);
 	// pre muons
-	for(int mu_i=0; mu_i<num_pre_muons; ++mu_i){
+	for(size_t mu_i=0; mu_i<num_pre_muons; ++mu_i){
 		// only consider first muboy muon (only for multi-mu events?)
-		if(mu_index[mu_i] > 0) return false;
-		
-		dlt_hists_pre.at(mu_class[mu_i])->Fill(dlt_mu_lowe[mu_i]);   // FIXME weight by num_pre_muons
-		dt_hists_pre.at(mu_class[mu_i])->Fill(dt_mu_lowe[mu_i]);     // FIXME weight by num_pre_muons
+		Log(toolName+" checking muboy index==0",v_debug+2,verbosity);
+		if(mu_index[mu_i] > 0) continue;
+		myTreeSelections.AddPassingEvent("pre_muon_muboy_i==0",mu_i);
 		
 		// to evaluate systematic on lt cut, apply various dt cuts and see how the lt cut efficiency varies
 		// since we're interested in the effect on the spallation sample, which is given by
 		// the total - post-muon sample, record both pre- and post- muon samples with various dt cuts
-		for(auto&& a_dt_cut : dlt_systematic_dt_cuts_pre){
-			if(dt_mu_lowe[mu_i] < a_dt_cut.first) a_dt_cut.second->Fill(dt_mu_lowe[mu_i]);
+		for(int dt_cut_i=0; dt_cut_i<spall_lifetimes.size(); ++dt_cut_i){
+			Log(toolName+" checking nominal dlt cut",v_debug+2,verbosity);
+			if(fabs(dt_mu_lowe[mu_i]) < spall_lifetimes.at(dt_cut_i)){
+				myTreeSelections.AddPassingEvent(std::string("pre_mu_dt_cut_")+toString(dt_cut_i),mu_i);
+			}
 		}
 	}
 	// post muons
-	for(int mu_i=num_pre_muons; mu_i<(num_pre_muons+num_post_muons); ++mu_i){
+	for(size_t mu_i=num_pre_muons; mu_i<(num_pre_muons+num_post_muons); ++mu_i){
+		Log(toolName+" checking muboy index==0",v_debug+2,verbosity);
 		if (mu_index[mu_i] > 0) continue;
+		myTreeSelections.AddPassingEvent("post_muon_muboy_i==0",mu_i);
 		
-		dlt_hists_post.at(mu_class[mu_i])->Fill(dlt_mu_lowe[mu_i]);  // FIXME weight by num_post_muons
-		dt_hists_post.at(mu_class[mu_i])->Fill(dt_mu_lowe[mu_i]);    // FIXME weight by num_post_muons
-		
-		for(auto&& a_dt_cut : dlt_systematic_dt_cuts_post){
-			if(dt_mu_lowe[mu_i] < a_dt_cut.first) a_dt_cut.second->Fill(dt_mu_lowe[mu_i]);
+		for(int dt_cut_i=0; dt_cut_i<spall_lifetimes.size(); ++dt_cut_i){
+			Log(toolName+" checking nominal dlt cut",v_debug+2,verbosity);
+			if(dt_mu_lowe[mu_i] < spall_lifetimes.at(dt_cut_i)){
+				myTreeSelections.AddPassingEvent(std::string("post_mu_dt_cut_")+toString(dt_cut_i),mu_i);
+			}
 		}
 	}
 	// in Finalise we'll substract the two to get dt and dlt distributions for spallation only.
@@ -317,41 +339,41 @@ bool PurewaterLi9Rate::Analyse(){
 	// the following cuts are based on muon-lowe pair variables, so loop over muon-lowe pairs
 	Log(toolName+" Looping over "+toString(num_pre_muons)
 				+" preceding muons to look for spallation events",v_debug,verbosity);
-	for(int mu_i=0; mu_i<num_pre_muons; ++mu_i){
-		IncrementEventCount("mu_lowe_pairs");
+	for(size_t mu_i=0; mu_i<num_pre_muons; ++mu_i){
+		myTreeSelections.AddPassingEvent("mu_lowe_pairs", mu_i);
 		
 		// safety check: should not consider muons after lowe event
+		Log(toolName+" checking dt of pre-muon <0",v_debug+2,verbosity);
 		if (dt_mu_lowe[mu_i] >= 0) break;
-		IncrementEventCount("muboy_index==0");
+		myTreeSelections.AddPassingEvent("pre-mu_dt<0", mu_i);
+		
+		Log(toolName+" checking muboy index==0",v_debug+2,verbosity);
+		if (mu_index[mu_i] > 0) continue;
+		myTreeSelections.AddPassingEvent("muboy_index==0", mu_i);
 		
 		// Apply nominal lt cut, unless muon type was misfit or a poorly fit single muon
-		if(not (dlt_mu_lowe[mu_i] < 200 || mu_class[mu_i] == muboy_classes::misfit || 
-			   (mu_class[mu_i] == muboy_classes::single_thru_going && mu_fit_goodness[mu_i] < 0.4))) continue;
-		Log(toolName+" entry "+toString(entry_number)+", muon "+toString(mu_i)
-					+" passed dlt cut",v_debug,verbosity);
-		IncrementEventCount("dlt_mu_lowe>200cm");
-		
-		// record the distribution of dt_mu_lowe
-		dt_mu_lowe_hist->Fill(dt_mu_lowe[mu_i]);  // FIXME weight by num_pre_muons
-		// in finalise we'll fit this distribution to estimate the number of events from each isotope
+		Log(toolName+" checking nominal dlt cut",v_debug+2,verbosity);
+		if(not (dlt_mu_lowe[mu_i] < 200 || mu_class[mu_i] == constants::muboy_classes::misfit || 
+			   (mu_class[mu_i] == constants::muboy_classes::single_thru_going && mu_fit_goodness[mu_i] < 0.4)))
+			    continue;
+		myTreeSelections.AddPassingEvent("dlt_mu_lowe>200cm", mu_i);
 		
 		// That's all for assessing the amount of general spallation isotopes
 		// --------------------------------------------------------------
 		// for Li9 we have a number of additional cuts
 		
 		// apply Li9 energy range cut
+		Log(toolName+" checking li9 energy range cut",v_debug+2,verbosity);
 		if ( LOWE->bsenergy <= 7.5 || LOWE->bsenergy >= li9_endpoint ) continue;
-		Log(toolName+" entry "+toString(entry_number)+", muon "+toString(mu_i)
-					+" passed Li9 energy range cut",v_debug,verbosity);
-		IncrementEventCount("lowe_energy_in_li9_range");
+		myTreeSelections.AddPassingEvent("lowe_energy_in_li9_range");
 		
 		// apply Li9 lifetime cut
-		if( dt_mu_lowe[mu_i] < 0.05 || dt_mu_lowe[mu_i] > 0.5 ) continue;
-		Log(toolName+" entry "+toString(entry_number)+", muon "+toString(mu_i)
-					+" passed Li9 lifetime cut",v_debug,verbosity);
-		IncrementEventCount("dt_mu_lowe_in_li9_range");
+		Log(toolName+" checking li9 lifetime cut",v_debug+2,verbosity);
+		if( dt_mu_lowe[mu_i] > -0.05 || dt_mu_lowe[mu_i] < -0.5 ) continue;
+		myTreeSelections.AddPassingEvent("dt_mu_lowe_in_li9_range", mu_i);
 		
 		// no other mu within 1ms of this lowe event
+		Log(toolName+" checking for another muon within 1ms",v_debug+2,verbosity);
 		bool other_muon_within_1ms = false;  // XXX check we're interpreting this cut right
 		for(int othermu_i=0; othermu_i<(num_pre_muons+num_post_muons); ++othermu_i){
 			if(othermu_i==mu_i) continue; // looking for muons other than the current one
@@ -361,19 +383,16 @@ bool PurewaterLi9Rate::Analyse(){
 			}
 		}
 		if(other_muon_within_1ms) continue;
-		Log(toolName+" entry "+toString(entry_number)+", muon "+toString(mu_i)
-					+" passed >1ms to another muon cut",v_debug,verbosity);
-		IncrementEventCount("lowest_other_mu_dt>1ms");
+		myTreeSelections.AddPassingEvent("closest_other_mu_dt>1ms");
 		
 		// search for ncapture candidates: >7 hits within 10ns T-TOF in 50ns-535us after lowe events ✅
 		
 		// calculate neutron FOM and cut failing ones
+		Log(toolName+" checking for a neutron passing BDT cut",v_debug+2,verbosity);
 		if( (num_neutron_candidates==0) || 
 			(*std::max_element(ntag_FOM.begin(), ntag_FOM.end())<ntag_FOM_threshold)) continue;
-		Log(toolName+" entry "+toString(entry_number)+", muon "+toString(mu_i)
-					+" passed ntag cut",v_debug,verbosity);
 		// XXX as reference, we should have 116 remaining candidate events here
-		IncrementEventCount("ntag_FOM>0.995");
+		myTreeSelections.AddPassingEvent("ntag_FOM>0.995");
 		
 		// apparently in Zhang study no events had multiple ntag candidates
 		if(num_neutron_candidates>1){
@@ -381,19 +400,12 @@ bool PurewaterLi9Rate::Analyse(){
 				+" neutron candidates!",v_debug,verbosity);
 		}
 		
-		// plot distribution of beta energies from passing triplets, compare to fig 4
-		li9_e_hist->Fill(LOWE->bsenergy); // FIXME weight by num_post_muons
-		
-		// plot distirbution of mu->beta   dt from passing triplets, compare to fig 6
-		li9_muon_dt_hist->Fill(dt_mu_lowe[mu_i]); // FIXME weight by num_post_muons
-		
 		// plot distribution of beta->ntag dt from passing triplets, compare to fig 5
 		// Zhang had no events with >1 ntag candidate: should we only take the first? XXX
-		for(int neutron_i=0; neutron_i<num_neutron_candidates; ++neutron_i){
-			li9_ntag_dt_hist->Fill(dt_lowe_n[neutron_i]); // FIXME weight by num_post_muons and num neutrons
-			IncrementEventCount("mu_lowe_ntag_triplets");
+		for(size_t neutron_i=0; neutron_i<num_neutron_candidates; ++neutron_i){
+			myTreeSelections.AddPassingEvent("mu_lowe_ntag_triplets", {mu_i, neutron_i});
 		}
-	
+		
 	} // end loop over muons
 	
 	return true;
@@ -513,7 +525,8 @@ bool PurewaterLi9Rate::SoniasAnalyse(){
 				if(dlt_mu_lowe[i] >= 200) continue;  // *** no special treatment for poorly fit muons ***
 				
 				// apply 9Li lifetime cut
-				if(fabs(dt_mu_lowe[i]) <= 0.05 || fabs(dt_mu_lowe[i]) >= 0.5) continue;
+				if(fabs(dt_mu_lowe[i]) <= li9_lifetime_dtmin ||
+				   fabs(dt_mu_lowe[i]) >= li9_lifetime_dtmax) continue;
 				
 				// apply beta energy < Li9 endpoint cut
 				//if( LOWE->bsenergy >= li9_endpoint ) continue;   // ??? not applied here?
@@ -579,15 +592,6 @@ void PurewaterLi9Rate::make_BDT_bins(){
 		bdt_cut_thresholds[num_bdt_cut_bins - i] = 1 - pow(10, cutval);
 	}
 	printVals(bdt_cut_thresholds, v_debug, verbosity, "BDT cutoff values: ");
-}
-
-void PurewaterLi9Rate::IncrementEventCount(std::string cutname){
-	// track remaining numbers of events after each cut
-	if(cut_tracker.count(cutname)==0){
-		cut_tracker.emplace(cutname,1);
-	} else {
-		cut_tracker.at(cutname)++;
-	}
 }
 
 // #####################################################################
@@ -665,14 +669,23 @@ int PurewaterLi9Rate::DisableUnusedBranches(){
 	return myTreeReader.OnlyEnableBranches(used_branches);
 }
 
+////////////////////////////////////////////////////////////////
+////////////////////////////////////////////////////////////////
+// not needed as writing is done by MTreeSelection
+// TODO cleanup?
+
 int PurewaterLi9Rate::CreateOutputFile(std::string outputFile){
+/*
 	Log(toolName+": Creating output file "+outputFile,v_message,verbosity);
 	outfile = new TFile(outputFile.c_str(), "RECREATE");
-	outtree = new TTree("eventtree", "Li9 Spallation Analysis");
 	
-	// make output branches
+	// pre- and post-muon dt and dlt distributions
+	//============================================
+	outtree = new TTree("mu_lowe_dists", "All Mu to Low-E Events");
+	
 	// XXX FILL ME
 	
+*/
 	return 0;
 }
 
@@ -680,7 +693,13 @@ void PurewaterLi9Rate::ClearOutputTreeBranches(){
 	// XXX FILL ME
 }
 
+int PurewaterLi9Rate::FillTree(){
+	// XXX FILL ME
+	return 0;
+}
+
 int PurewaterLi9Rate::WriteTree(){
+/*
 	Log(toolName+" writing TTree",v_debug,verbosity);
 	outfile->cd();
 	// TObject::Write returns the total number of bytes written to the file.
@@ -692,14 +711,17 @@ int PurewaterLi9Rate::WriteTree(){
 		Log(toolName+ " Wrote "+toString(get_ok)+" bytes",v_debug,verbosity);
 	}
 	return bytes;
+*/
+	return 0;
 };
 
 void PurewaterLi9Rate::CloseFile(){
+/*
 	outtree->ResetBranchAddresses();
 	outfile->Write("*",TObject::kOverwrite);
 	outfile->Close();
 	delete outfile;
 	outfile = nullptr;
-};
-
+*/
+}
 

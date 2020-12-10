@@ -3,14 +3,15 @@
 #include "Algorithms.h"
 #include "Constants.h"
 //#include <libgen.h>  // dirname and basename
-//#include <sys/stat.h>  // dirname and basename
-//#include <sys/types.h> // for stat() test to see if file or folder
-//#include <unistd.h>
+#include <sys/stat.h>  // dirname and basename
+#include <sys/types.h> // for stat() test to see if file or folder
+#include <unistd.h>
 //#include <memory>
 //#include <exception>
 //#include <cstring>  // strncpy
 #include <fstream>
 #include <sstream>
+#include <cctype> // ::tolower
 
 #include "TStyle.h"
 #include "TColor.h"
@@ -67,6 +68,9 @@ std::string GetStdoutFromCommand(std::string cmd, int bufsize){
 	return data;
 }
 
+// XXX this doesn't always work, e.g. things like gObjectTable->Print() print to stdout
+// but do not get captured. TODO replace with CStdoutRedirector as per getOutputFromFunctionCall
+// in Algorithms.h
 // start capturing output from stderr. call this before any c++ functions that print to std::cerr
 // in order to capture those printouts. XXX Don't forget to end_stderr_capture afterwards!!! XXX
 std::streambuf* start_stderr_capture(){
@@ -88,6 +92,19 @@ std::string end_stderr_capture(std::streambuf* previous_buff){
 	// get the captured contents
 	std::string capture = capture_buffer->str();
 	// free the temporary buffer
+	delete capture_buffer;
+	return capture;
+}
+
+// as above but for stdout rather than stderr
+std::streambuf* start_stdout_capture(){
+	return std::cout.rdbuf(new std::stringbuf);
+}
+
+std::string end_stdout_capture(std::streambuf* previous_buff){
+	std::stringbuf* capture_buffer = static_cast<std::stringbuf*>(std::cout.rdbuf(previous_buff));
+	std::cout<<capture_buffer->str();
+	std::string capture = capture_buffer->str();
 	delete capture_buffer;
 	return capture;
 }
@@ -126,3 +143,30 @@ double Mag(basic_array<float>& mom){
 	return sqrt(Mag(mom));
 }
 
+bool CheckPath(std::string path, std::string& type){
+	struct stat s;
+	if(stat(path.c_str(),&s)==0){
+		if(s.st_mode & S_IFDIR){        // mask to extract if it's a directory?? how does this work?
+			type="d";  //it's a directory
+			return true;
+		} else if(s.st_mode & S_IFREG){ // mask to check if it's a file??
+			type="f"; //it's a file
+			return true;
+		} else {
+			// exists, but neither file nor directory?
+			type="???";
+			return false;
+			//assert(false&&"Check input path: stat says it's neither file nor directory..?");
+		}
+	} else {
+		// does not exist - could be a pattern, e.g. "/path/to/rootfiles_*.root"
+		type="none";
+		return false;
+	}
+	return false;
+}
+
+std::string ToLower(std::string astring){
+	std::transform(astring.begin(), astring.end(), astring.begin(), ::tolower);  // why is the :: needed?
+	return astring;
+}

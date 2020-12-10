@@ -23,6 +23,7 @@ class MTreeReader {
 	int Load(std::string filename, std::string treename);
 	int LoadFile(std::string filename);
 	int LoadTree(std::string treename);
+	int Load(TChain* chain);
 	// TODO constructor/loader for tchains or tree pointers
 	// TODO accept vector of files from LoadFileList Algorithms function
 	
@@ -93,6 +94,9 @@ class MTreeReader {
 	// file/tree level getters
 	TFile* GetFile();
 	TTree* GetTree();
+	TTree* GetCurrentTree();
+	TChain* GetChain();
+	uint64_t GetEntryNumber();
 	
 	// tree operations
 	int Clear();
@@ -107,6 +111,8 @@ class MTreeReader {
 	
 	// maps of branch properties
 	std::map<std::string,std::string> GetBranchTypes();
+	std::map<std::string,intptr_t> GetBranchAddresses();
+	std::map<std::string, std::string> GetBranchTitles();
 	
 	// specific branch properties
 	TBranch* GetBranch(std::string branchname);
@@ -132,16 +138,16 @@ class MTreeReader {
 	std::map<std::string,std::vector<std::pair<std::string,int>>> branch_dimensions; // dims of variable size arrays
 	std::map<std::string,std::vector<size_t>> branch_dims_cache; // dims of constant sized arrays
 	
-	// XXX TODO FIXME XXX we should hold unique_ptr to these, and then implement std::move
-	// on copy construction and assignment, otherwise i think MTreeReader mytreeReader = MTreeReader(file, tree)
-	// fails because it constructs a temporary, uses operator= to copy over the members (the pointers),
-	// then call the destructor on the temporary which closes the file and deletes the trees!
-	// for now workaround is to use myTreeReader.Load(file, tree) not operator=
 	TFile* thefile=nullptr;
-	TTree* thetree=nullptr;
-	TChain* thechain=nullptr;
+	TTree* thetree=nullptr;      // generic, if working with a tchain we cast it to a TTree
+	//TChain* thechain=nullptr;
+	bool isChain=false;
+	TTree* currenttree=nullptr;  // the active TTree
 	bool autoclear=true;  // call 'Clear' method on all object branches before GetEntry
 	int verbosity=1; // TODO add to constructor
+	uint64_t currentEntryNumber=0;
+	int currentTreeNumber=0;
+	
 };
 
 /*

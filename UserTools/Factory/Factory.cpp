@@ -13,6 +13,8 @@ if (tool=="LoadFileList") ret=new LoadFileList;
 if (tool=="RootReadTest") ret=new RootReadTest;
 if (tool=="PlotNeutronCaptures") ret=new PlotNeutronCaptures;
 if (tool=="PurewaterLi9Rate") ret=new PurewaterLi9Rate;
+if (tool=="GracefulStop") ret=new GracefulStop;
+if (tool=="PurewaterLi9Plots") ret=new PurewaterLi9Plots;
 return ret;
 }
 

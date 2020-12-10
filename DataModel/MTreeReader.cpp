@@ -17,11 +17,68 @@
 #include <iostream>
 #include <vector>
 #include <sstream>
-#include <algorithm> // find
+#include <algorithm> // std::find
+
+#include "Algorithms.h"  // CheckPath
 
 // TODO constructor/loader for tchains or tree pointers
-MTreeReader::MTreeReader(std::string filename, std::string treename){
-	Load(filename, treename);
+/* TODO move this checking code into other constructors; usually we implicitly invoke the
+   TODO default constructor since the TreeReader is a member of the tool: we simply call 'Load'
+MTreeReader::MTreeReader(std::string fpath, std::string treename){
+	
+	std::string pathtype;
+	bool pathexists = CheckPath(fpath, pathtype);
+	
+	if(pathexists && pathtype=="f"){
+		// given a file: load it as normal
+		Load(fpath, treename);
+	} else if(pathexists && pathtype=="d"){
+		// given a directory: we can't work with this
+		std::cerr<<"!!! MTreeReader constructor called with a path to a directory !!!"<<std::endl
+				 <<"Please pass either a path to a file or a glob pattern"<<std::endl
+				 <<"The passed path was "<<fpath<<std::endl;
+	} else if(pathexists){
+		// stat indicated that this was neither path nor directory?
+		std::cerr<<"!!! MTreeReader constructor called with a path to an unknown resource type !!!"<<std::endl
+				 <<"Please pass either a path to a file or a glob pattern"<<std::endl
+				 <<"The passed path was "<<fpath<<", type was "<<pathtype<<std::endl;
+	} else {
+		// path does not exist - it could be a glob pattern
+		// try to construct a TChain from it
+		TChain* chain = new TChain(treename.c_str());
+		int filesadded = chain->Add(fpath.c_str());
+		// ↑ note this does not check the files contain the correct TTree!
+		if(filesadded==0){
+			std::cerr<<"!!! MTreeReader constructor called with a non-existant input path !!!"<<std::endl
+					 <<"An attempt to use this as a pattern to construct a TChain found no files!"<<std::endl
+					 <<"The passed path was "<<fpath<<std::endl;
+		} else {
+			int localEntry = chain->LoadTree(0);
+			if(localEntry<0){
+				std::cerr<<"!!! MTreeReader constructor called with a non-existant input path !!!"<<std::endl
+						 <<"An attempt to use this as a pattern to construct a TChain found "
+						 <<filesadded<<" files, but loading the first TTree failed with code "
+						 <<localEntry<<"!"<<std::endl
+						 <<"Is the tree name \""<<treename<<"\" correct?"<<std::endl
+						 <<"The passed path was "<<fpath<<std::endl;
+			} else {
+				Load(chain);
+			}
+		}
+	}
+}
+*/
+
+MTreeReader::MTreeReader(std::string fpath, std::string treename){
+	Load(fpath, treename);
+}
+
+int MTreeReader::Load(TChain* chain){
+	thetree = (TTree*)chain;
+	isChain = true;
+	thefile = thetree->GetCurrentFile();
+	int ok = ParseBranches();
+	return ok;
 }
 
 int MTreeReader::Load(std::string filename, std::string treename){
@@ -159,7 +216,7 @@ int MTreeReader::UpdateBranchPointers(){
 }
 
 int MTreeReader::ParseBranchDims(std::string branchname){
-	// parse branch title for sequences of type '[X]' suggesting an array
+	// parse branch title for sequences of type '[X]' suggesting an array.
 	// extract 'X'. Scan the list of branch names for 'X', in which case
 	// this is a variable length array, otherwise it's a fixed size so use stoi.
 	std::string branchtitle = branch_titles.at(branchname);
@@ -188,6 +245,9 @@ int MTreeReader::ParseBranchDims(std::string branchname){
 		} else {
 			// it ought to be a static size, try to convert from string to int
 			// catch the exception thrown in the event that it can't be converted
+			// note this only falls over when the start of the string isn't numeric
+			// it copes with negatives, but truncates to integer, and ignores anthing
+			// after the first non-digit character.
 			try{
 				this_branch_dimensions.emplace_back(std::pair<std::string,int>{"",std::stoi(sizestring)});
 			}
@@ -296,6 +356,9 @@ int MTreeReader::Clear(){
 }
 
 int MTreeReader::GetEntry(long entry_number){
+	// in case we've already got this entry loaded, nothing to do
+	if(currentEntryNumber==entry_number) return 1;
+	
 	// if we've been requested to invoke Clear() on all objects before each Get, do so
 	if(verbosity>3) std::cout<<"MTreeReader GetEntry "<<entry_number<<std::endl;
 	if(autoclear){
@@ -303,15 +366,44 @@ int MTreeReader::GetEntry(long entry_number){
 		if(not clear_ok){ return -2; }
 	}
 	
+	if(isChain){
+		// if we're processing a chain, load the tree first
+		int status = thetree->LoadTree(entry_number);
+		if(status<0){
+			/*
+			-1: The chain is empty.
+			-2: The requested entry number is less than zero or too large for the chain or TTree.
+			-3: The file corresponding to the entry could not be correctly open
+			-4: The TChainElement corresponding to the entry is missing or the TTree is missing from the file.
+			-5: Internal error, please report the circumstance when this happen as a ROOT issue.
+			-6: An error occurred within the notify callback.
+			*/
+			std::cerr<<"MTreeReader error loading next TTree from TChain! "
+					 <<"TChain::LoadTree returned "<<status<<"\n";
+			return status;
+		}
+		
+		// check for tree changes
+		if(currentTreeNumber!=thetree->GetTreeNumber()){
+			// new tree
+			currenttree = thetree->GetTree();
+			currentTreeNumber = thetree->GetTreeNumber();
+			thefile = thetree->GetCurrentFile();
+			// TODO maybe implement some mechanism of notifying requestors?
+			// maybe build a list of function pointers to invoke?
+		}
+	}
+	
 	// load data from tree
 	// The function returns the number of bytes read from the input buffer.
 	// If entry does not exist the function returns 0. If an I/O error occurs, the function returns -1.
 	auto bytesread = thetree->GetEntry(entry_number);
+	if(bytesread>0) currentEntryNumber = entry_number;
 	return bytesread;
 }
 
 long MTreeReader::GetEntriesFast(){
-	return thetree->GetEntriesFast();  // FIXME for TChain
+	return thetree->GetEntriesFast();
 }
 
 long MTreeReader::GetEntries(){
@@ -319,8 +411,8 @@ long MTreeReader::GetEntries(){
 }
 
 MTreeReader::~MTreeReader(){
-	if(thechain) thechain->ResetBranchAddresses();  // are these mutually exclusive?
-	if(thetree) thetree->ResetBranchAddresses();    // 
+	//if(thechain) thechain->ResetBranchAddresses();  // are these mutually exclusive?
+	if(thetree) thetree->ResetBranchAddresses();      // 
 	if(thefile) thefile->Close();
 	delete thefile;
 }
@@ -339,13 +431,44 @@ TFile* MTreeReader::GetFile(){
 	return thefile;
 }
 
+// bit of a confusing set here.
+TTree* MTreeReader::GetCurrentTree(){
+	// return the tree containing the current element if we're processing a TChain
+	// (still valid if processing a single TTree)
+	return currenttree;
+}
+
+TChain* MTreeReader::GetChain(){
+	// return a TChain: we can only do this if we're processing a TChain
+	// otherwise return a nullptr (we shouldn't return a child class pointer to a base class object)
+	if(!isChain){
+		std::cerr<<"Warning: MTreeReader::GetChain called when processing a TTree"<<std::endl;
+	}
+	return dynamic_cast<TChain*>(thetree); // XXX returns nullptr if this isn't actually a TChain
+}
+
 TTree* MTreeReader::GetTree(){
+	// return the TChain* cast to a TTree*, if processing a TChain, or the TTree* being processed otherwise.
+	//  A TTree/TChain agnostic way to get the full extend of whatever's being process
 	return thetree;
+}
+
+
+uint64_t MTreeReader::GetEntryNumber(){
+	return currentEntryNumber;
 }
 
 // branch map getters
 std::map<std::string,std::string> MTreeReader::GetBranchTypes(){
 	return branch_types;
+}
+
+std::map<std::string,std::string> MTreeReader::GetBranchTitles(){
+	return branch_titles;
+}
+
+std::map<std::string, intptr_t> MTreeReader::GetBranchAddresses(){
+	return branch_value_pointers;
 }
 
 // specific branch getters

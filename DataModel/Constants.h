@@ -25,6 +25,12 @@ void PrintVector(TVector3& avec, bool newline=false);
 void PrintVector(TLorentzVector& avec, bool newline=false);
 
 namespace constants{
+	
+	/// @brief The format code for a multievent binary BoostStore
+	constexpr int BOOST_STORE_BINARY_FORMAT = 0;
+	constexpr int BOOST_STORE_ASCII_FORMAT = 1;
+	constexpr int BOOST_STORE_MULTIEVENT_FORMAT = 2;
+	
 	static const TDatabasePDG particleDb;
 	// https://root.cern.ch/root/html532/src/TDatabasePDG.cxx.html
 	// https://root.cern/doc/v608/classTDatabasePDG.html
@@ -44,50 +50,48 @@ namespace constants{
 		{21, "Muon-Nuclear Interaction"},
 		{23, "Photonuclear"},
 		{30, "Below tracking threshold"}
-
-/*
-NEXT, 1, particle has reached the boundary of current volume
-MULS, 2, multiple scattering
-LOSS, 3, continuous energy loss
-FIEL, 4, bending in magnetic feld
-DCAY, 5, particle decay
-PAIR, 6, photon pair-production or muon direct pair production
-COMP, 7, Compton scattering
-PHOT, 8, photoelectric effect
-BREM, 9, bremsstrahlung
-DRAY, 10, δ-ray production
-ANNI, 11, positron annihilation
-HADR, 12, hadronic interaction
-ECOH, 13, hadronic elastic coherent scattering
-EVAP, 14, nuclear evaporation
-FISS, 15, nuclear fssion
-ABSO, 16, nuclear absorption
-ANNH, 17, anti-proton annihilation
-CAPT, 18, neutron capture
-EINC, 19, hadronic elastic incoherent scattering
-INHE, 20, hadronic inelastic scattering
-MUNU, 21, muon-nuclear interaction
-TOFM, 22, exceeded time of fight cut
-PFIS, 23, nuclear photo-fssion
-SCUT, 24, the particle was unexpectedly crossing volume boundaries due to bending in a magnetic feld and the step has been halved to avoid this
-RAYL, 25, Rayleigh effect
-PARA, 26, parametrisation activated
-PRED, 27, error matrix computed (GEANE tracking)
-LOOP, 28, not used
-NULL, 29, no mechanism is active, usually at the entrance of a new volume
-STOP, 30, particle has fallen below energy threshold and tracking stops
-LABS, 101, Cerenkov photon absorption
-LREF, 102, Cerenkov photon refection/refraction
-SMAX, 103, step limited by STEMAX
-SCOR, 104, correction against loss of precision in boundary crossing
-CKOV, 105, Cerenkov photon generation
-REFL, 106, Cerenkov photon refection
-REFR, 107, Cerenkov photon refraction
-SYNC, 108, synchrotron radiation generation
-STRA, 109, PAI or ASHO model used for energy loss fuctuations.
-*/
-
 	};
+		/*
+		NEXT, 1, particle has reached the boundary of current volume
+		MULS, 2, multiple scattering
+		LOSS, 3, continuous energy loss
+		FIEL, 4, bending in magnetic feld
+		DCAY, 5, particle decay
+		PAIR, 6, photon pair-production or muon direct pair production
+		COMP, 7, Compton scattering
+		PHOT, 8, photoelectric effect
+		BREM, 9, bremsstrahlung
+		DRAY, 10, δ-ray production
+		ANNI, 11, positron annihilation
+		HADR, 12, hadronic interaction
+		ECOH, 13, hadronic elastic coherent scattering
+		EVAP, 14, nuclear evaporation
+		FISS, 15, nuclear fssion
+		ABSO, 16, nuclear absorption
+		ANNH, 17, anti-proton annihilation
+		CAPT, 18, neutron capture
+		EINC, 19, hadronic elastic incoherent scattering
+		INHE, 20, hadronic inelastic scattering
+		MUNU, 21, muon-nuclear interaction
+		TOFM, 22, exceeded time of fight cut
+		PFIS, 23, nuclear photo-fssion
+		SCUT, 24, the particle was unexpectedly crossing volume boundaries due to bending in a magnetic feld and the step has been halved to avoid this
+		RAYL, 25, Rayleigh effect
+		PARA, 26, parametrisation activated
+		PRED, 27, error matrix computed (GEANE tracking)
+		LOOP, 28, not used
+		NULL, 29, no mechanism is active, usually at the entrance of a new volume
+		STOP, 30, particle has fallen below energy threshold and tracking stops
+		LABS, 101, Cerenkov photon absorption
+		LREF, 102, Cerenkov photon refection/refraction
+		SMAX, 103, step limited by STEMAX
+		SCOR, 104, correction against loss of precision in boundary crossing
+		CKOV, 105, Cerenkov photon generation
+		REFL, 106, Cerenkov photon refection
+		REFR, 107, Cerenkov photon refraction
+		SYNC, 108, synchrotron radiation generation
+		STRA, 109, PAI or ASHO model used for energy loss fuctuations.
+		*/
 	
 	// from skdetsim source file 'gt2pd.h'
 	static const std::map<int,std::string> g3_particle_code_to_string{
@@ -474,6 +478,22 @@ STRA, 109, PAI or ASHO model used for energy loss fuctuations.
 	// TODO TParticleTable allows a 'DecayList' of daughter nuclides
 	// could we use this to connect skdetsim daughter nuclei to their parent?
 	// we will probably need to build this decay list ourselves though.
+	
+	enum muboy_classes{ misfit=0, single_thru_going=1, single_stopping=2, multiple_mu=3, also_multiple_mu=4, corner_clipper=5};
+	const std::map<muboy_classes,std::string> muboy_class_to_name{
+		{muboy_classes::misfit,"misfit"},
+		{muboy_classes::single_thru_going,"single_thru_going"},
+		{muboy_classes::single_stopping,"single_stopping"},
+		{muboy_classes::multiple_mu,"multiple_mu"},
+		{muboy_classes::also_multiple_mu,"also_multiple_mu"}
+	};
+	const std::map<std::string,muboy_classes> muboy_name_to_class{
+		{"misfit",muboy_classes::misfit},
+		{"single_thru_going",muboy_classes::single_thru_going},
+		{"single_stopping",muboy_classes::single_stopping},
+		{"multiple_mu",muboy_classes::multiple_mu},
+		{"also_multiple_mu",muboy_classes::also_multiple_mu}
+	};
 }
 
 // from the PDG on Monte Carlo Codes:

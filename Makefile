@@ -2,13 +2,15 @@ include $(SKOFL_ROOT)/config.gmk  # pulls in libskroot.so as well
 
 # user library paths
 LDFLAGS = -L/host/software/skrootlibs -L/host/software/stllibs -L/host/software/relic_sk4_ana/relic_sk4_ana/data_reduc/third/lib
+LDFLAGS += -L/home/moflaher/skrootlibs -L/home/moflaher/stllibs -L/home/moflaher/relic_sk4_ana/relic_sk4_ana/data_reduc/third/lib
 # user libraries
 LOCAL_LIBS = -lRootStl -lthirdredvars
 
 LD_RUN_PATH=$(SKOFL_LIBDIR):$(A_LIBDIR)
 
 # C++ compiler flags - XXX config.gmk sets this already, so APPEND ONLY XXX
-CXXFLAGS    += -std=c++11 -fdiagnostics-color=always -Wno-reorder -Wno-sign-compare -Wno-unused-variable -Wno-unused-but-set-variable -Wl,--as-needed
+#PROFLAGS= -g -pg -ggdb3
+CXXFLAGS    += $(PROFLAGS) -O3 -std=c++11 -fdiagnostics-color=always -Wno-reorder -Wno-sign-compare -Wno-unused-variable -Wno-unused-but-set-variable -Wl,--as-needed
 
 ToolDAQPath=ToolDAQ
 ZMQLib= -L $(ToolDAQPath)/zeromq-4.0.7/lib -lzmq 
