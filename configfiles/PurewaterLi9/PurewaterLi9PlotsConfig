@@ -31,3 +31,5 @@ li9_lifetime_dtmax 0.5          # [us]
 run_min 68671                   # SHE trigger threshold lowered to 8 MeV
 run_max 73031                   # Yang Zhang's time range
 first_entry 152882              # first TTree entry - first entry of run 68671
+
+show_plots 1                    # show plots while running

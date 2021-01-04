@@ -13,6 +13,8 @@
 #include "thirdredvars.h"     // ThirdRed class
 
 class TH1F;
+class TF1;
+class THStack;
 
 /**
 * \class PurewaterLi9Plots
@@ -53,6 +55,7 @@ class PurewaterLi9Plots: public Tool {
 	std::string topCutName;                                     // name of loosest cut we need every entry from
 	std::string valuesFile="li9_values.bs";                     // save or read values from BoostStore
 	std::string valuesFileMode="";                              // "read", "write" or anything else = neither
+	int show_plots=0;                                           // if we want to show plots, not just save them
 	
 	// output file of plots and fits
 	TFile* outfile=nullptr;                                     // the output TFile
@@ -68,11 +71,10 @@ class PurewaterLi9Plots: public Tool {
 	bool Analyse();        // main body
 	bool PlotMuonDt();
 	bool PlotMuonDlt();
-	bool PlotPaperDt();
-	bool PlotPaperDlt();
-	bool PlotPaperDt(TH1F* baseref);
-	bool PlotPaperDlt(TH1F* baseref);
+	bool PlotPaperDt(THStack& ourplots);
+	bool PlotPaperDlt(THStack& ourplots);
 	bool PlotSpallationDt();
+	bool FitSpallationDt(TH1F& dt_mu_lowe_hist_short, int rangenum);
 	bool PlotLi9TripletsDt();
 	bool BinnedLi9DtChi2Fit(TH1F* li9_muon_dt_hist);
 	bool UnbinnedLi9DtLogLikeFit();
@@ -81,6 +83,14 @@ class PurewaterLi9Plots: public Tool {
 	bool PlotLi9BetaEnergy();
 //	void MeasureDltSystematic(); // TODO
 //	void MeasureIsotopeRates();  // TODO
+	
+	// helper functions used in FitSpallationDt
+	void SetParameterNames(std::string isotope);
+	void SetParameterNames(std::string isotope_1, std::string isotope_2);
+	void FixLifetime(TF1& func, std::string isotope);
+	void PushFitAmp(TF1& func, std::string isotope);
+	void PullFitAmp(TF1& func, std::string isotope);
+	TF1 BuildFunction(std::vector<std::string> isotopes, double func_min=0, double func_max=30);
 	
 	// variables to read in
 	// ====================
@@ -158,6 +168,9 @@ class PurewaterLi9Plots: public Tool {
 	std::vector<float> li9_ntag_dt_vals;
 	// distribution of lowe energies for mu+li9+ntag triplets
 	std::vector<float> li9_e_vals;
+	
+	// functions used during fitting of the number of isotope events
+	std::map<std::string,TF1*> fitfuncs;
 	
 	// standard tool stuff
 	// ===================

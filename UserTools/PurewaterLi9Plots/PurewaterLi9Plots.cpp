@@ -34,6 +34,24 @@
 #include "Constants.h"
 
 const double li9_endpoint = 14.5; // MeV
+const std::map<std::string,double> lifetimes{  // from 2015 paper, seconds
+	{"11Be",19.9},
+	{"16N",10.3},
+	{"15C",3.53},
+	{"8Li",1.21},
+	{"8B",1.11},
+	{"16C",1.08},
+	{"9Li",0.26},
+	{"9C",0.18},
+	{"8He",0.17},
+	{"12Be",0.034},
+	{"12B",0.029},
+	{"13B",0.025},
+	{"14B",0.02},
+	{"12N",0.016},
+	{"13O",0.013},
+	{"11Li",0.012}
+};
 
 PurewaterLi9Plots::PurewaterLi9Plots():Tool(){
 	// get the name of the tool from its class name
@@ -66,6 +84,9 @@ bool PurewaterLi9Plots::Initialise(std::string configfile, DataModel &data){
 	m_variables.Get("li9_lifetime_dtmin",li9_lifetime_dtmin);
 	m_variables.Get("li9_lifetime_dtmax",li9_lifetime_dtmax);
 	
+	// get the TApplication if we want to show plots on the fly
+	m_variables.Get("show_plots",show_plots);
+	if(show_plots) data.GetTApp(); // we don't really need it, just trigger its creation
 	
 	// if reading values from a BoostStore, we don't need to do any loops
 	if(valuesFileMode=="read"){
@@ -470,6 +491,8 @@ bool PurewaterLi9Plots::Finalise(){
 }
 
 bool PurewaterLi9Plots::PlotMuonDlt(){
+	
+	THStack my_spall_dlts;
 	// make histograms of transverse distance to muon for all pre- and post-muons
 	// and their difference to extract the spallation distributions
 	for(int mu_class_i=0; mu_class_i<6; ++mu_class_i){  // we have 5 muboy classifications
@@ -489,12 +512,20 @@ bool PurewaterLi9Plots::PlotMuonDlt(){
 		dlt_hist_spall->Add(&ahist_pre,&ahist_post,1,-1);
 		std::cout<<"subtracting "<<ahist_post.GetEntries()<<" post entries from "<<ahist_pre.GetEntries()
 				 <<" pre entries results in "<<dlt_hist_spall->GetEntries()<<" ("
-				 <<(ahist_post.GetEntries()-ahist_pre.GetEntries())<<") entries"<<std::endl;
+				 <<(ahist_pre.GetEntries()-ahist_post.GetEntries())<<") entries"<<std::endl;
 		// XXX we seem to lose half our entries here....??
 		dlt_hist_spall->Write();
 		dlt_hist_spall->SetDirectory(0);
-		delete dlt_hist_spall;
+		my_spall_dlts.Add(dlt_hist_spall);
 	}
+	
+	// create and add the paper versions
+	PlotPaperDlt(my_spall_dlts);
+	
+	my_spall_dlts.Write("spall_dls_stack");
+	
+	// cleanup
+	my_spall_dlts.GetHists()->Delete();
 	
 	return true;
 }
@@ -546,13 +577,11 @@ bool PurewaterLi9Plots::PlotMuonDt(){
 		}
 	}
 	
+	// create and add the paper ones for overlay
+	PlotPaperDt(my_spall_dts);
+	
 	// write the stack to file so we can easily see all histos
 	my_spall_dts.Write("spall_dts_stack");
-	
-	// also create the paper ones for overlay
-	TH1F* ahist = my_spall_dts.GetHists()->At(0);
-	PlotPaperDt(ahist);
-	PlotPaperDlt(ahist);
 	
 	// TH1::Clone creates a copy that we own, so are responsible for cleanup.
 	// THStacks do not take ownership of their histos, and we can't make them.
@@ -573,10 +602,270 @@ bool PurewaterLi9Plots::PlotSpallationDt(){
 	dt_mu_lowe_hist.Write();
 	dt_mu_lowe_hist_short.Write();
 	
-	// XXX fit this with all the rates....
-	
+	// fit this with all the rates....
+	// we do the fitting in 5 stages, initially fitting sub-ranges of the distribution
+	for(int i=0; i<5; ++i) FitSpallationDt(dt_mu_lowe_hist, i);
+	// cleanup
+	for(auto&& afunc : fitfuncs) delete afunc.second;
+	fitfuncs.clear();
 	
 	return true;
+}
+
+bool PurewaterLi9Plots::FitSpallationDt(TH1F& dt_mu_lowe_hist, int rangenum){
+	// do sub-range fitting based on section B of the 2015 paper
+	// formula 1 from the paper, with a sub-range as described in section B2
+	// we have 4 sub-ranges to fit
+	switch (rangenum){
+	case 0:{
+		// fit range 50us -> 0.1s with 12B + 12N only
+		// make a temporary histo to fit over this range so we use suitable binning?
+		TH1F hist_to_fit("hist_to_fit","Spallation Muon to Low-E Time Differences",100,50e-6,0.1);
+		for(auto&& aval : dt_mu_lowe_vals) hist_to_fit.Fill(fabs(aval));
+		// make the functions for each isotope we're fitting this time and fix the lifetimes
+		fitfuncs.emplace("12B",new TF1{"f_12B","([0]/[1])*exp(-x/[1])+[2]"});
+		fitfuncs.emplace("12N",new TF1{"f_12N","([0]/[1])*exp(-x/[1])+[2]"});
+		SetParameterNames("12B");
+		SetParameterNames("12N");
+		// make a sum function which we'll fit
+		TF1 func_sum("f_case1","f_12B + f_12N");
+//		fitfuncs.emplace("12B",BuildFunction({"12B","12N"}));
+		std::cout<<"par names of case1 are "<<std::endl;
+		for(int i=0; i<func_sum.GetNpar(); ++i){
+			std::cout<<i<<" = "<<func_sum.GetParName(i)<<std::endl;
+		}
+		// fix the isotope lifetimes. Values and fix flags do not get inherited
+		// by the sum function, so there's no point setting them in the component TF1s. :(
+		std::cout<<"fixing lifetimes"<<std::endl;
+		FixLifetime(func_sum,"12B");
+		FixLifetime(func_sum,"12N");
+		// do the fit
+		hist_to_fit.Fit(&func_sum,"","",50e-6,0.1);
+		// record the results for the next step
+		std::cout<<"recording fit results"<<std::endl;
+		PushFitAmp(func_sum,"12B");
+		PushFitAmp(func_sum,"12N");
+		hist_to_fit.Draw();
+		gPad->WaitPrimitive();
+		break;
+		}
+		// OK!
+	case 1:{
+		// fit range 6-30s with 16N + 11B only
+		TH1F hist_to_fit("hist_to_fit","Spallation Muon to Low-E Time Differences",100,6,30);
+		for(auto&& aval : dt_mu_lowe_vals) hist_to_fit.Fill(fabs(aval));
+		fitfuncs.emplace("16N",new TF1{"f_16N","([0]/[1])*exp(-x/[1])+[2]",0,30});
+		fitfuncs.emplace("11Be",new TF1{"f_11Be","([0]/[1])*exp(-x/[1])+[2]",0,30});
+		SetParameterNames("16N");
+		SetParameterNames("11Be");
+		TF1 func_sum("f_case2","f_16N + f_11Be",0,30);
+		FixLifetime(func_sum,"16N");
+		FixLifetime(func_sum,"11Be");
+		hist_to_fit.Fit(&func_sum,"","",6,30);
+		// record the results for the next step
+		PushFitAmp(func_sum,"16N");
+		PushFitAmp(func_sum,"11Be");
+		hist_to_fit.Draw();
+		gPad->WaitPrimitive();
+		break;
+		}
+		// OK!
+	case 2:{
+		// fit the range 0.1-0.8s with the components previously fit now fixed,
+		TH1F hist_to_fit("hist_to_fit","Spallation Muon to Low-E Time Differences",100,0.1,0.8);
+		for(auto&& aval : dt_mu_lowe_vals) hist_to_fit.Fill(fabs(aval));
+		// allowing additional components Li9 + a combination of 8He+9C
+		fitfuncs.emplace("9Li",new TF1{"f_9Li","([0]/[1])*exp(-x/[1])+[2]",0,30});
+		fitfuncs.emplace("8He_9C",
+				new TF1{"f_8He_9C", "([0]/2.)*(exp(-x/[1])/[1]+exp(-x/[2])/[2])+[3]",0,30});
+		fitfuncs.emplace("8Li_8B",
+				new TF1{"f_8Li_8B","([0]/2.)*(exp(-x/[1])/[1]+exp(-x/[2])/[2])+[3]",0,30});
+		SetParameterNames("9Li");
+		SetParameterNames("8He","9C");
+		SetParameterNames("8Li","8B");
+		TF1 func_sum("f_case3","f_9Li + f_8He_9C + f_8Li_8B + f_12B + f_12N + f_16N + f_11Be",0,30);
+		// fix lifetimes
+		FixLifetime(func_sum,"9Li");
+		FixLifetime(func_sum,"8He");
+		FixLifetime(func_sum,"9C");
+		FixLifetime(func_sum,"8Li");
+		FixLifetime(func_sum,"8B");
+		FixLifetime(func_sum,"12B");
+		FixLifetime(func_sum,"12N");
+		FixLifetime(func_sum,"16N");
+		FixLifetime(func_sum,"11Be");
+		// pull fit results from the last two stages
+		PullFitAmp(func_sum,"12B");
+		PullFitAmp(func_sum,"12N");
+		PullFitAmp(func_sum,"16N");
+		PullFitAmp(func_sum,"11Be");
+		// fit the new components
+		hist_to_fit.Fit(&func_sum,"","",0.1,0.8);
+		// record the results for the next step
+		PushFitAmp(func_sum,"9Li");
+		PushFitAmp(func_sum,"8He_9C");
+		PushFitAmp(func_sum,"8Li_8B");
+		hist_to_fit.Draw();
+		gPad->WaitPrimitive();
+		break;
+		}
+		// XXX not ok, fit terminated. Many parameters.... 
+	case 3:{
+		// fit the range 0.8-6s with the components previously fit now fixed,
+		TH1F hist_to_fit("hist_to_fit","Spallation Muon to Low-E Time Differences",100,0.8,6);
+		for(auto&& aval : dt_mu_lowe_vals) hist_to_fit.Fill(fabs(aval));
+		// allowing additional components 15C + 16N
+		fitfuncs.emplace("15C",new TF1{"f_15C","([0]/[1])*exp(-x/[1])+[2]",0,30});
+		fitfuncs.emplace("16N",new TF1{"f_16N","([0]/[1])*exp(-x/[1])+[2]",0,30});
+		SetParameterNames("15C");
+		SetParameterNames("16N");
+		TF1 func_sum("f_case1","f_15C + f_16N + f_8Li_8B",0,30);
+		FixLifetime(func_sum,"15C");
+		FixLifetime(func_sum,"16N");
+		FixLifetime(func_sum,"8Li");
+		FixLifetime(func_sum,"8B");
+		hist_to_fit.Fit(&func_sum,"","",0.8,6);
+		// record the results for the next step
+		PushFitAmp(func_sum,"15C");
+		PushFitAmp(func_sum,"16N");
+		hist_to_fit.Draw();
+		gPad->WaitPrimitive();
+		break;
+		}
+	case 4:{
+		// final case: release all the fixes but keep the previously fit values as starting points.
+		std::string sum_func_formula="";
+		for(auto&& apair : fitfuncs){
+			TF1* afunc = apair.second;
+			for(int i=0; i<afunc->GetNpar(); ++i){
+				afunc->ReleaseParameter(i);
+			}
+			sum_func_formula = (sum_func_formula=="") ? afunc->GetName() : sum_func_formula+"+"+afunc->GetName();
+		}
+		TF1 func_sum("f_case5",sum_func_formula.c_str(),0,30);
+		dt_mu_lowe_hist.Fit(&func_sum,"","",0,30);
+		
+		TCanvas c1;
+		dt_mu_lowe_hist.Draw();
+		gPad->WaitPrimitive();
+		break;
+		}
+	default:
+		Log(toolName+" FitSubRangeDt invoked with invalid range "+toString(rangenum),v_error,verbosity);
+	}
+	
+	return true;
+}
+
+TF1 PurewaterLi9Plots::BuildFunction(std::vector<std::string> isotopes, double func_min, double func_max){
+	std::string total_func="";
+	std::string func_name="";
+	std::map<std::string,int> parameter_posns;
+	int next_par_index=0;
+	for(std::string& anisotope : isotopes){
+		func_name += anisotope+"_";
+		// first, this 'isotope' may be a degenerate pair, so try to split it apart
+		if(anisotope.find("_")==std::string::npos){
+			// not a pair
+			int first_index=next_par_index;
+			// "([0]/[1])*exp(-x/[1])"
+			std::string this_func =  "(["+toString(next_par_index++)
+									+"]/["+toString(next_par_index)
+									+"])*exp(-x/["+toString(next_par_index)+"])";
+			// add this function to the total function string
+			total_func = (total_func=="") ? this_func : total_func+" + "+this_func;
+			// add the parameter names to our map
+			parameter_posns.emplace("amp_"+anisotope,first_index++);
+			parameter_posns.emplace("lifetime_"+anisotope,first_index);
+		} else {
+			// it's a pair. For now, only support two isotopes at a time.
+			std::string first_isotope = anisotope.substr(0,anisotope.find_first_of("_"));
+			std::string second_isotope = anisotope.substr(anisotope.find_first_of("_")+1,std::string::npos);
+			// the fit function isn't just the sum of two single isotope functions
+			// as they share an amplitude and constant
+			//"[0]*(exp(-x/[1])/[1]+exp(-x/[2])/[2])
+			int first_index=next_par_index;
+			std::string this_func =  "["+toString(next_par_index++)+"]*"
+									+"(exp(-x/["+toString(next_par_index)+"])/" // don't increment index; no ++
+									+"["+toString(next_par_index++)+"]+"
+									+"exp(-x/["+toString(next_par_index)+"])/"  // don't increment index; no ++
+									+"["+toString(next_par_index++)+"])";
+			// add this function to the total function string
+			total_func = (total_func=="") ? this_func : total_func+" + "+this_func;
+			// add the parameter names to our map
+			parameter_posns.emplace("amp_"+anisotope,first_index++);
+			parameter_posns.emplace("lifetime_"+first_isotope,first_index++);
+			parameter_posns.emplace("lifetime_"+second_isotope,first_index);
+		}
+	}
+	// add the constant term
+	total_func += " + ["+toString(next_par_index)+"]";
+	parameter_posns.emplace("const",next_par_index);
+	
+	// build the total function from the sum of all strings
+	TF1 afunc(func_name.c_str(),total_func.c_str(),func_min,func_max);
+	
+	// OK, propagate parameter names to the function
+	for(auto&& next_par : parameter_posns){
+		afunc.SetParName(next_par.second,next_par.first);
+	}
+	
+	// return the built function
+	return afunc;
+}
+
+// set parameter names in a function
+// this is important because when building a sum of functions the parameters get shuffled,
+// so we can no longer use parameter numbers to set or get parameters
+void PurewaterLi9Plots::SetParameterNames(std::string isotope){
+	std::cout<<"setting parameter names for func "<<fitfuncs.at(isotope)->GetName()<<", isotope "<<isotope<<std::endl;
+	fitfuncs.at(isotope)->SetParNames(("amp_"+isotope).c_str(),
+									 ("lifetime_"+isotope).c_str(),
+									 ("const_"+isotope).c_str());
+	std::cout<<"func names are now: "<<std::endl;
+	for(int i=0; i<fitfuncs.at(isotope)->GetNpar(); ++i){
+		std::cout<<i<<"="<<fitfuncs.at(isotope)->GetParName(i)<<std::endl;
+	}
+}
+
+// sometimes we fit with a degenerate combination of two isotopes
+void PurewaterLi9Plots::SetParameterNames(std::string isotope_1, std::string isotope_2){
+	std::string combo = isotope_1+"_"+isotope_2;
+	fitfuncs.at(combo)->SetParNames(("amp_"+combo).c_str(),
+								   ("lifetime_"+isotope_2).c_str(),
+								   ("lifetime_"+isotope_2).c_str(),
+								   ("const_"+combo).c_str());
+}
+
+// fix lifetime of TF1 based on isotope name
+void PurewaterLi9Plots::FixLifetime(TF1& func, std::string isotope){
+	int par_number = func.GetParNumber(("lifetime_"+isotope).c_str());
+	func.FixParameter(par_number,lifetimes.at(isotope));
+}
+
+// copy fit result amplitude value back into a component TF1
+void PurewaterLi9Plots::PushFitAmp(TF1& func, std::string isotope){
+	std::cout<<"fixing fit result for func "<<func.GetName()<<", isotope "<<isotope<<std::endl;
+	std::cout<<"available pars are: "<<std::endl;
+	for(int i=0; i<func.GetNpar(); ++i){
+		std::cout<<i<<"="<<func.GetParName(i)<<std::endl;
+	}
+	int par_number = func.GetParNumber(("amp_"+isotope).c_str());
+	fitfuncs.at(isotope)->FixParameter(par_number,func.GetParameter(("amp_"+isotope).c_str()));
+}
+
+// copy amplitude value from a component TF1 into a sum function for fitting
+void PurewaterLi9Plots::PullFitAmp(TF1& func, std::string isotope){
+	int par_number = func.GetParNumber(("amp_"+isotope).c_str());
+	func.FixParameter(par_number,fitfuncs.at(isotope)->GetParameter(("amp_"+isotope).c_str()));
+}
+
+TF1 PurewaterLi9Plots::GetSumFunc(TF1& func, Rest... rest){
+	return GetSumFunc(func, rest);
+}
+
+TF1 PurewaterLi9Plots::GetSumFunc(TF1& funca, TF1& funcb){
+	return TF1("sum_func",
 }
 
 bool PurewaterLi9Plots::PlotLi9NtagDt(){
@@ -617,10 +906,10 @@ bool PurewaterLi9Plots::PlotLi9TripletsDt(){
 	std::vector<float> yerrs(n_bins);
 	std::vector<float> xerrs(n_bins);
 	for(int bini=0; bini<n_bins; ++bini){
-		xvals[bini]=li9_muon_dt_hist.GetBinCenter(bini);
-		yvals[bini]=li9_muon_dt_hist.GetBinContent(bini);
-		xerrs[bini]=li9_muon_dt_hist.GetBinWidth(1)/2.;
-		yerrs[bini]= (yvals[bini]==0) ? 0 : 1./sqrt(yvals[bini]); // FIXME how to handle errors on bin counts 0? 
+		xvals.at(bini)=li9_muon_dt_hist.GetBinCenter(bini);
+		yvals.at(bini)=li9_muon_dt_hist.GetBinContent(bini);
+		xerrs.at(bini)=li9_muon_dt_hist.GetBinWidth(1)/2.;
+		yerrs.at(bini)= (yvals.at(bini)==0) ? 0 : 1./sqrt(yvals.at(bini)); // FIXME how to handle errors on bin counts 0? 
 	}
 	TGraphErrors li9_dt_tgraph(n_bins,xvals.data(),yvals.data(),xerrs.data(),yerrs.data());
 	li9_dt_tgraph.SetTitle(li9_muon_dt_hist.GetTitle());
@@ -845,262 +1134,101 @@ double PurewaterLi9Plots::li9_lifetime_loglike(double* x, double* par){
 
 
 
-bool PurewaterLi9Plots::PlotPaperDt(TH1F* basehist){
-	TH1F* h_paper_dt_mu_nonfitted = basehist->Clone("paper_dt_nonfitted");
+bool PurewaterLi9Plots::PlotPaperDt(THStack& ourplots){
+	// get the first of our plots to use as a base to define binning
+	TH1F* basehist = (TH1F*)ourplots.GetHists()->At(0);
+	
+	TH1F* h_paper_dt_mu_nonfitted = (TH1F*)basehist->Clone("paper_dt_nonfitted");
 	h_paper_dt_mu_nonfitted->Reset();
 	// digitized from paper. I didn't do all series' as most overlapped.
 	std::vector<double> paper_dt_mu_nonfitted
 		{ 0.5458, 0.3111, 0.1014, 0.0403, 0.0014, 0.0806, 0.0694, 0.0111, 0.0014, 0.0056};
 	for(int i=0; i<paper_dt_mu_nonfitted.size(); ++i){
-		h_paper_dt_mu_nonfitted.SetBinContent(i, paper_dt_mu_nonfitted[i]);
+		h_paper_dt_mu_nonfitted->SetBinContent(i+1, paper_dt_mu_nonfitted.at(i));
 	}
-	h_paper_dt_mu_nonfitted.SetLineColor(kBlue);
-	h_paper_dt_mu_nonfitted.SetLineStyle(2);
+	h_paper_dt_mu_nonfitted->SetLineColor(kBlue);
+	h_paper_dt_mu_nonfitted->SetLineStyle(2);
 	
-	TH1F* h_paper_dt_mu_single = basehist->Clone("paper_dt_single");
+	TH1F* h_paper_dt_mu_single = (TH1F*)basehist->Clone("paper_dt_single");
 	h_paper_dt_mu_single->Reset();
 	std::vector<double> paper_dt_mu_single
 		{ 0.5806, 0.2153, 0.0903, 0.0403, 0.0236, 0.0153, 0.0111, 0.0083, 0.0097, 0.0069 };
 	for(int i=0; i<paper_dt_mu_single.size(); ++i){
-		h_paper_dt_mu_single.SetBinContent(i, paper_dt_mu_single[i]);
+		h_paper_dt_mu_single->SetBinContent(i+1, paper_dt_mu_single.at(i));
 	}
-	h_paper_dt_mu_single.SetLineColor(kBlack);
-	h_paper_dt_mu_single.SetLineStyle(2);
+	h_paper_dt_mu_single->SetLineColor(kBlack);
+	h_paper_dt_mu_single->SetLineStyle(2);
 	
-	// multigraph for easy combined plotting
+	/*
+	// put them into a stack
 	THStack paper_dts;
-	paper_dts.Add(&h_paper_dt_mu_nonfitted);
-	paper_dts.Add(&h_paper_dt_mu_single);
-	
+	paper_dts.Add(h_paper_dt_mu_nonfitted);
+	paper_dts.Add(h_paper_dt_mu_single);
 	// write them out to file
 	paper_dts.Write("spall_dts_paper");
-	
-	// clean up
+	// cleanup
 	paper_dts.GetHists()->Delete();
+	*/
+	
+	// add to our stack for easy combined plotting
+	ourplots.Add(h_paper_dt_mu_nonfitted);
+	ourplots.Add(h_paper_dt_mu_single);
 	
 	return true;
 }
 
-bool PurewaterLi9Plots::PlotPaperDlt(TH1F* basehist){
+bool PurewaterLi9Plots::PlotPaperDlt(THStack& ourplots){
+	
+	// get first one as a base for defining axes
+	TH1F* basehist = (TH1F*)ourplots.GetHists()->At(0);
+	
 	// digitized from paper
 	std::vector<double> paper_dl_multiple
 		{ 0.1414, 0.2303, 0.1980, 0.1465, 0.1121, 0.0798, 0.0596, 0.0404 };
-	TH1F* h_paper_dl_multiple = basehist->Clone("paper_dl_multiple");
+	TH1F* h_paper_dl_multiple = (TH1F*)basehist->Clone("paper_dl_multiple");
 	h_paper_dl_multiple->Reset();
 	for(int i=0; i<paper_dl_multiple.size(); ++i){
-		h_paper_dl_multiple.SetBinContent(i,paper_dl_multiple[i]);
+		h_paper_dl_multiple->SetBinContent(i+1,paper_dl_multiple.at(i));
 	}
-	h_paper_dl_multiple.SetLineColor(kRed);
-	h_paper_dl_multiple.SetLineStyle(2);
+	h_paper_dl_multiple->SetLineColor(kRed);
+	h_paper_dl_multiple->SetLineStyle(2);
 	
 	std::vector<double> paper_dl_single
 		{ 0.3636, 0.3707, 0.1485, 0.0636, 0.0283, 0.0141, 0.0121, 0.0071 };
-	TH1F* h_paper_dl_single = basehist->Clone("paper_dl_single");
+	TH1F* h_paper_dl_single = (TH1F*)basehist->Clone("paper_dl_single");
 	h_paper_dl_single->Reset();
-	for(auto&& apair : paper_dl_single){
-		h_paper_dl_single.SetPoint(h_paper_dl_single.GetN(), apair.first, apair.second);
+	for(int i=0; i<paper_dl_single.size(); ++i){
+		h_paper_dl_single->SetBinContent(i+1,paper_dl_single.at(i));
 	}
-	h_paper_dl_single.SetLineColor(kBlack);
-	h_paper_dl_single.SetLineStyle(2);
+	h_paper_dl_single->SetLineColor(kBlack);
+	h_paper_dl_single->SetLineStyle(2);
 	
 	std::vector<double> paper_dl_stopping
 		{ 0.4161, 0.3242, 0.0455, 0.0414, 0.0707, 0.0434, 0.0263, 0.0303 };
-	TH1F* h_paper_dl_stopping = basehist->Clone("paper_dl_stopping");
+	TH1F* h_paper_dl_stopping = (TH1F*)basehist->Clone("paper_dl_stopping");
 	h_paper_dl_stopping->Reset();
 	for(int i=0; i<paper_dl_stopping.size(); ++i){
-		h_paper_dl_stopping.SetBinContent(i,paper_dl_stopping[i]);
+		h_paper_dl_stopping->SetBinContent(i+1,paper_dl_stopping.at(i));
 	}
-	h_paper_dl_stopping.SetLineColor(kMagenta);
-	h_paper_dl_stopping.SetLineStyle(2);
+	h_paper_dl_stopping->SetLineColor(kMagenta);
+	h_paper_dl_stopping->SetLineStyle(2);
 	
+	/*
+	// put them into a stack
 	THStack paper_dls;
-	paper_dls.Add(&h_paper_dl_multiple);
-	paper_dls.Add(&h_paper_dl_single);
-	paper_dls.Add(&h_paper_dl_stopping);
-	
+	paper_dls.Add(h_paper_dl_multiple);
+	paper_dls.Add(h_paper_dl_single);
+	paper_dls.Add(h_paper_dl_stopping);
 	// write them out to file
-	paper_dls.Write("spall_dts_paper");
-	
+	paper_dls.Write("spall_dls_paper");
+	// cleanup
 	paper_dls.GetHists()->Delete();
+	*/
 	
-	return true;
-}
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-bool PurewaterLi9Plots::PlotPaperDt(){
-	// digitized from paper. I didn't do all series' as most overlapped.
-	std::vector<std::pair<double,double>> paper_dt_mu_nonfitted{
-		{0.012168141592920359,0.5458333333333334},
-		{0.03761061946902655,0.3111111111111111},
-		{0.062499999999999986,0.10138888888888886},
-		{0.08794247787610619,0.040277777777777746},
-		{0.11283185840707964,-0.001388888888888884},
-		{0.1377212389380531,0.08055555555555549},
-		{0.16261061946902655,0.06944444444444442},
-		{0.1875,0.011111111111111072},
-		{0.21294247787610615,0.001388888888888884},
-		{0.2372787610619469,0.005555555555555536}
-	};
-	TGraph g_paper_dt_mu_nonfitted;
-	for(auto&& apair : paper_dt_mu_nonfitted){
-		g_paper_dt_mu_nonfitted.SetPoint(g_paper_dt_mu_nonfitted.GetN(), apair.first, apair.second);
-	}
-	g_paper_dt_mu_nonfitted.SetName("paper_dt_nonfitted");
-	g_paper_dt_mu_nonfitted.SetMarkerColor(kBlue);
-	g_paper_dt_mu_nonfitted.SetMarkerStyle(2);
-	g_paper_dt_mu_nonfitted.SetLineWidth(0);
-	std::vector<std::pair<double,double>> paper_dt_mu_single{
-		{0.012168141592920359,0.5805555555555555},
-		{0.03761061946902655,0.2152777777777778},
-		{0.062499999999999986,0.09027777777777779},
-		{0.08794247787610619,0.040277777777777746},
-		{0.11283185840707964,0.023611111111111138},
-		{0.1366150442477876,0.015277777777777724},
-		{0.16261061946902655,0.011111111111111072},
-		{0.1875,0.008333333333333304},
-		{0.21294247787610615,0.009722222222222188},
-		{0.23783185840707965,0.00694444444444442}
-	};
-	TGraph g_paper_dt_mu_single;
-	for(auto&& apair : paper_dt_mu_single){
-		g_paper_dt_mu_single.SetPoint(g_paper_dt_mu_single.GetN(), apair.first, apair.second);
-	}
-	g_paper_dt_mu_single.SetName("paper_dt_single");
-	g_paper_dt_mu_single.SetMarkerColor(kBlack);
-	g_paper_dt_mu_single.SetMarkerStyle(2);
-	g_paper_dt_mu_single.SetLineWidth(0);
-	
-	// multigraph for easy combined plotting
-	TMultiGraph paper_dts;
-	paper_dts.Add(&g_paper_dt_mu_nonfitted);
-	paper_dts.Add(&g_paper_dt_mu_single);
-	
-	// write them out to file
-	paper_dts.Write("spall_dts_paper");
-	
-	return true;
-}
-
-bool PurewaterLi9Plots::PlotPaperDlt(){
-	// colour scheme of paper
-	std::map<std::string, EColor> class_colours{
-		{"misfit",kBlue},
-		{"single_thru_going",kBlack},
-		{"single_stopping",kMagenta},
-		{"multiple_mu",kRed},
-		{"also_multiple_mu",kRed},
-		{"corner_clipper",kWhite}
-	
-	// digitized from paper
-	std::vector<std::pair<double,double>> paper_dl_multiple{
-		{24.724061810154467,0.14141414141414138},
-		{75.05518763796908,0.23030303030303023},
-		{125.38631346578359,0.19797979797979792},
-		{173.95143487858718,0.1464646464646464},
-		{225.16556291390725,0.11212121212121207},
-		{274.6136865342163,0.07979797979797976},
-		{324.06181015452535,0.059595959595959536},
-		{374.39293598233985,0.04040404040404033}
-	};
-	TGraph g_paper_dl_multiple;
-	for(auto&& apair : paper_dl_multiple){
-		g_paper_dl_multiple.SetPoint(g_paper_dl_multiple.GetN(), apair.first, apair.second);
-	}
-	g_paper_dl_multiple.SetName("paper_dl_multiple");
-	g_paper_dl_multiple.SetMarkerColor(kBlack);
-	g_paper_dl_multiple.SetMarkerStyle(2);
-	g_paper_dl_multiple.SetLineWidth(0);
-	std::vector<std::pair<double,double>> paper_dl_single{
-		{23.841059602648897,0.3636363636363636},
-		{75.05518763796908,0.37070707070707065},
-		{124.50331125827813,0.14848484848484844},
-		{174.83443708609263,0.0636363636363636},
-		{225.16556291390725,0.028282828282828243},
-		{274.6136865342163,0.014141414141414121},
-		{324.9448123620308,0.012121212121212088},
-		{374.39293598233985,0.007070707070707005}
-	};
-	TGraph g_paper_dl_single;
-	for(auto&& apair : paper_dl_single){
-		g_paper_dl_single.SetPoint(g_paper_dl_single.GetN(), apair.first, apair.second);
-	}
-	g_paper_dl_single.SetName("paper_dl_single");
-	g_paper_dl_single.SetMarkerColor(kBlack);
-	g_paper_dl_single.SetMarkerStyle(2);
-	g_paper_dl_single.SetLineWidth(0);
-	std::vector<std::pair<double,double>> paper_dl_stopping{
-		24.724061810154467,0.4161616161616161},
-		74.17218543046351,0.3242424242424242},
-		124.50331125827813,0.045454545454545414},
-		174.83443708609263,0.04141414141414135},
-		225.16556291390725,0.07070707070707066},
-		274.6136865342163,0.04343434343434338},
-		323.1788079470198,0.02626262626262621},
-		374.39293598233985,0.030303030303030276}
-	};
-	TGraph g_paper_dl_stopping;
-	for(auto&& apair : paper_dl_stopping){
-		g_paper_dl_stopping.SetPoint(g_paper_dl_stopping.GetN(), apair.first, apair.second);
-	}
-	g_paper_dl_stopping.SetName("paper_dl_stopping");
-	g_paper_dl_stopping.SetMarkerColor(kBlack);
-	g_paper_dl_stopping.SetMarkerStyle(2);
-	g_paper_dl_stopping.SetLineWidth(0);
-	
-	TMultiGraph paper_dls;
-	paper_dls.Add(&g_paper_dl_multiple
-	paper_dls.Add(&g_paper_dl_single
-	paper_dls.Add(&g_paper_dl_stopping);
-	
-	// write them out to file
-	paper_dls.Write("spall_dts_paper");
+	// add them to our stack for combined plotting
+	ourplots.Add(h_paper_dl_multiple);
+	ourplots.Add(h_paper_dl_single);
+	ourplots.Add(h_paper_dl_stopping);
 	
 	return true;
 }
