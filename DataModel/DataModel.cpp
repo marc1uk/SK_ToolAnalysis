@@ -1,6 +1,7 @@
 #include "DataModel.h"
 
-DataModel::DataModel(){}
+DataModel::DataModel(){ rootTApp=nullptr; }
+DataModel::~DataModel(){ if(rootTApp) delete rootTApp; }
 
 /*
 TTree* DataModel::GetTTree(std::string name){
@@ -24,4 +25,11 @@ void DataModel::DeleteTTree(std::string name){
 }
 
 */
+
+TApplication* DataModel::GetTApp(){
+	if(rootTApp==nullptr){
+		rootTApp = new TApplication("rootTApp",0,0);
+	}
+	return rootTApp;
+}
 

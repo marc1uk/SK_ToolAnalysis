@@ -6,6 +6,7 @@
 #include <vector>
 
 //#include "TTree.h"
+#include "TApplication.h"
 
 #include "Store.h"
 #include "BoostStore.h"
@@ -32,10 +33,12 @@ class DataModel {
  public:
   
   DataModel(); ///< Simple constructor
+  ~DataModel(); ///< Simple destructor
 
   //TTree* GetTTree(std::string name);
   //void AddTTree(std::string name,TTree *tree);
   //void DeleteTTree(std::string name);
+  TApplication* GetTApp();
 
   Store vars; ///< This Store can be used for any variables. It is an inefficent ascii based storage    
   BoostStore CStore; ///< This is a more efficent binary BoostStore that can be used to store a dynamic set of inter Tool variables.
@@ -51,6 +54,7 @@ class DataModel {
 
   
   //std::map<std::string,TTree*> m_trees; 
+  TApplication* rootTApp=nullptr;
   
   
   

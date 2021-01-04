@@ -31,7 +31,7 @@ namespace constants{
 	constexpr int BOOST_STORE_ASCII_FORMAT = 1;
 	constexpr int BOOST_STORE_MULTIEVENT_FORMAT = 2;
 	
-	static const TDatabasePDG particleDb;
+	static const TDatabasePDG* particleDb = TDatabasePDG::Instance();
 	// https://root.cern.ch/root/html532/src/TDatabasePDG.cxx.html
 	// https://root.cern/doc/v608/classTDatabasePDG.html
 	

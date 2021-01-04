@@ -92,7 +92,7 @@ void PrintVector(TLorentzVector& avec, bool newline){
 }
 
 double PdgToMass(int code){
-	auto particle = constants::particleDb.GetParticle(code);
+	auto particle = constants::particleDb->GetParticle(code);
 	if(particle==nullptr) return -1;
 	return particle->Mass()*1000.;      // converted to MeV
 }
