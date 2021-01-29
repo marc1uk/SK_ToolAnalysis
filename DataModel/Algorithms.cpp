@@ -17,6 +17,7 @@
 #include "TColor.h"
 #include "TVector3.h"
 #include "TLorentzVector.h"
+#include "TObjectTable.h"
 
 int ReadListFromFile(std::string filename, std::vector<std::string> &lines, char commentchar, bool trim_whitespace){
 	// read each new line into a std::vector<string> and return
@@ -169,4 +170,22 @@ bool CheckPath(std::string path, std::string& type){
 std::string ToLower(std::string astring){
 	std::transform(astring.begin(), astring.end(), astring.begin(), ::tolower);  // why is the :: needed?
 	return astring;
+}
+
+void PrintObjectTable(){
+	// should work? will gObjectTable be recognised in the invoked context?
+//	std::string objecttable = getOutputFromFunctionCall([](){gObjectTable->Print();});
+	// safer?
+	auto&& printobjtable = [](TObjectTable* gobjs){gobjs->Print();};
+	std::string objecttable = getOutputFromFunctionCall(printobjtable, gObjectTable);
+	// or could we even obtain a pointer to gObjectTable::Print(), and just pass that?
+	
+	// anyway. Scan through all the output and extract just the line relating to number of
+	// TObjArrays, so we don't swamp the output.
+	std::stringstream objectstream(objecttable);
+	std::string aline;
+	while(getline(objectstream,aline, '\n')){
+		if(aline.find("TObjArray")!=std::string::npos) break;
+	}
+	std::cout<<aline<<std::endl;
 }

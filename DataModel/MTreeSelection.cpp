@@ -579,3 +579,35 @@ std::set<std::vector<size_t>> MTreeSelection::GetPassingIndices(std::string cutn
 MTreeReader* MTreeSelection::GetTreeReader(){
 	return treereader;
 }
+
+std::string MTreeSelection::BranchAddressToName(intptr_t branchptr){
+	if(branch_addresses.count(branchptr)==0){
+		std::string indexbranch="";
+		// we haven't yet seen this branch, or the branch address has changed
+		// scan the current branch addresses to find which one fills this variable
+		std::map<std::string, intptr_t> branchadds = treereader->GetBranchAddresses();
+		for(auto&& abranch : branchadds){
+			if(abranch.second==branchptr){
+				indexbranch=abranch.first;
+				break;
+			}
+		}
+		if(indexbranch==""){
+			std::cerr<<"MTreeSelection::BranchAddressToName failed to find name for branch!"<<std::endl;
+			return "";
+		}
+		branch_addresses.emplace(branchptr, indexbranch);
+		// it shouldn't happen often, but each time a branch address changes,
+		// it'll orphan an entry in our branch address to name map.
+		// Keep a reverse map, and use it to remove the old entry if one exists.
+		if(known_branches.count(indexbranch)){
+			branch_addresses.erase(known_branches.at(indexbranch));
+			known_branches.at(indexbranch) = branchptr;
+		} else {
+			known_branches.emplace(indexbranch,branchptr);
+		}
+		return indexbranch;
+	} else {
+		return branch_addresses.at(branchptr);
+	}
+}

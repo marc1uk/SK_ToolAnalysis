@@ -27,6 +27,7 @@ double Mag2(basic_array<float>& mom);
 double Mag(basic_array<float>& mom);
 bool CheckPath(std::string path, std::string& type);
 std::string ToLower(std::string astring);
+void PrintObjectTable();
 
 // a header/trailer for trying to capture error messages for calls to functions
 // that do not return any error code, but do print to stderr on error.

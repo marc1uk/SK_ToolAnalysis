@@ -31,6 +31,8 @@ class MyToolRoot: public Tool {
 	// =========
 	int ReadEntry(long entry_number);
 	int GetBranches();
+	bool Analyse();
+	int DisableUnusedBranches();
 	
 	// tool variables
 	// ==============

@@ -29,6 +29,7 @@ bool MyToolRoot::Initialise(std::string configfile, DataModel &data){
 	// open the input TFile and TTree
 	// ------------------------------
 	get_ok = myTreeReader.Load(inputFile, "eventtree");
+	DisableUnusedBranches();  // for efficiency of reading, only enable used branches
 	
 	return true;
 }
@@ -42,7 +43,15 @@ bool MyToolRoot::Execute(){
 	get_ok = GetBranches();
 	
 	// process the data
-	// TODO
+	try{
+		Analyse();
+	}
+	catch(...){
+		// catch any exceptions to ensure we always
+		// increment the event number and load the next entry.
+		// This prevents us getting stuck in a loop
+		// forever processing the same broken entry!
+	}
 	
 	// move to next entry
 	entrynum++;
@@ -61,13 +70,16 @@ bool MyToolRoot::Execute(){
 		return 0; // read error
 	}
 	
-	return get_ok;
-	
 	return true;
 }
 
 
 bool MyToolRoot::Finalise(){
+	
+	return true;
+}
+
+bool MyToolRoot::Analyse(){
 	
 	return true;
 }
@@ -101,4 +113,14 @@ int MyToolRoot::GetBranches(){
 	);
 	
 	return success;
+}
+
+int MyToolRoot::DisableUnusedBranches(){
+	std::vector<std::string> used_branches{
+		// list used branches here
+//		"filename",
+		"gamma_time"
+	};
+	
+	return myTreeReader.OnlyEnableBranches(used_branches);
 }

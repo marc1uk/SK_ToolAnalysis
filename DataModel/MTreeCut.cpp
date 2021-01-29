@@ -10,26 +10,8 @@
 #include <iostream>
 #include <sstream> // std::stringstream
 
-#include "Algorithms.h"         // for getOutputFromFunctionCall
-
 ////// debug
-void PrintObjectTable(){
-	// should work? will gObjectTable be recognised in the invoked context?
-//	std::string objecttable = getOutputFromFunctionCall([](){gObjectTable->Print();});
-	// safer?
-	auto&& printobjtable = [](TObjectTable* gobjs){gobjs->Print();};
-	std::string objecttable = getOutputFromFunctionCall(printobjtable, gObjectTable);
-	// or could we even obtain a pointer to gObjectTable::Print(), and just pass that?
-	
-	// anyway. Scan through all the output and extract just the line relating to number of
-	// TObjArrays, so we don't swamp the output.
-	std::stringstream objectstream(objecttable);
-	std::string aline;
-	while(getline(objectstream,aline, '\n')){
-		if(aline.find("TObjArray")!=std::string::npos) break;
-	}
-	std::cout<<aline<<std::endl;
-}
+//#include "Algorithms.h"         // for getOutputFromFunctionCall
 
 MTreeCut::MTreeCut(TFile* outfilein, std::string cutname) : cut_name(cutname), outfile(outfilein) {
 	mode="write";
