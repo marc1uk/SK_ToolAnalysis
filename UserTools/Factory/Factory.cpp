@@ -15,6 +15,7 @@ if (tool=="PlotNeutronCaptures") ret=new PlotNeutronCaptures;
 if (tool=="PurewaterLi9Rate") ret=new PurewaterLi9Rate;
 if (tool=="GracefulStop") ret=new GracefulStop;
 if (tool=="PurewaterLi9Plots") ret=new PurewaterLi9Plots;
+if (tool=="LoadBetaSpectraFluka") ret=new LoadBetaSpectraFluka;
 return ret;
 }
 
