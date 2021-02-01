@@ -111,6 +111,10 @@ class PurewaterLi9Rate: public Tool {
 	
 	// variables to write out
 	// ======================
+	struct tm runstart;
+	struct tm runend;
+	int current_run=0;
+	double livetime=0;
 	// output is handled by the MTreeSelection
 	
 	// calculation variables
@@ -144,6 +148,7 @@ class PurewaterLi9Rate: public Tool {
 	bool apply_third_reduction(const ThirdRed *th, const LoweInfo *LOWE);
 	bool Analyse();        // main body
 	bool SoniasAnalyse();  // translation of sonia's set of cuts
+	void AddLastRunTime();
 	
 	//void PrintBranches();                                     // print an output event, for debug
 	

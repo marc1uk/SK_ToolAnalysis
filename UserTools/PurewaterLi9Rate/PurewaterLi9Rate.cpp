@@ -1,3 +1,4 @@
+/* vim:set noexpandtab tabstop=4 wrap */
 #include "PurewaterLi9Rate.h"
 
 #include <cstdlib>
@@ -86,9 +87,10 @@ bool PurewaterLi9Rate::Initialise(std::string configfile, DataModel &data){
 		// cut name						// list of branches whose indices are required to identify this event
 		{"all",							{}},   // order of the branches specified here must match
 		{"68671<run<73031",				{}},   // the order of indices given to AddPassingEvent!
-		{"SNR>0.5",						{}},
-		{"dwall>200cm",					{}},
-		{"dt_mu_lowe>50us",				{}},
+		//{"SNR>0.5",					{}},   // already applied as part of online first reduction*
+		{"dwall>200cm",					{}},   // already applied as part of online first reduction*
+		{"dt_mu_lowe>50us",				{}},   // already applied as part of online first reduction*
+		//{"Q50/N50>0.5",				{}},   // *per Ashida-san, although dt_mu_lowe>50us does cut some events?
 		//{"thirdred",					{}},
 		//{"max_hits_200ns_AFT<50",		{}},
 		//{"min(dt_mu_lowe)>1ms",		{}},
@@ -120,6 +122,10 @@ bool PurewaterLi9Rate::Initialise(std::string configfile, DataModel &data){
 	// pass it to downstream tools processing this cut at the same time
 	intptr_t myTreeSelectionsPtr = reinterpret_cast<intptr_t>(&myTreeSelections);
 	m_data->CStore.Set("MTreeSelection",myTreeSelectionsPtr);
+	
+	// initialise both to current time so they're the same
+	runstart = *localtime(nullptr);
+	runend = runstart;
 	
 	toolchain_start=std::chrono::high_resolution_clock::now();
 	
@@ -205,6 +211,10 @@ bool PurewaterLi9Rate::Finalise(){
 	// write out the event numbers that passed each cut
 	myTreeSelections.Write();
 	
+	// add the last run duration to the livetime, in case it wasn't
+	AddLastRunTime();
+	m_data->CStore.Set("livetime", livetime);
+	
 	/*
 	// ensure everything is written to the output file
 	// -----------------------------------------------
@@ -224,6 +234,11 @@ bool PurewaterLi9Rate::Finalise(){
 
 // #####################################################################
 
+void PurewaterLi9Rate::AddLastRunTime(){
+	// if this is the last event we'll process, add the run livetime
+	livetime += difftime(mktime(&runstart), mktime(&runend));
+}
+
 // main body of the tool
 bool PurewaterLi9Rate::Analyse(){
 	// This gets called for each Execute iteration, to process one lowe event
@@ -242,13 +257,41 @@ bool PurewaterLi9Rate::Analyse(){
 	//if (HEADER->nrunsk > 74781) return false;  // WIT started after this run. What's the significance of this?
 	myTreeSelections.AddPassingEvent("68671<run<73031");
 	
+	// if this is the first event of a new run, add the run livetime
+	if(HEADER->nrunsk > current_run){
+		current_run = HEADER->nrunsk;
+		// set the time from the offsets since Jan 1st 1900?
+		//update the livetime with the run duration
+		livetime += difftime(mktime(&runstart), mktime(&runend));
+		
+		// set the new run start to this event's timestamp
+		runstart.tm_year = HEADER->ndaysk[0] - 1900;
+		runstart.tm_mon = HEADER->ndaysk[1] - 1;
+		runstart.tm_mday = HEADER->ndaysk[2];
+		runstart.tm_hour = HEADER->ntimsk[0];
+		runstart.tm_min = HEADER->ntimsk[1];
+		runstart.tm_sec = HEADER->ntimsk[2];
+	}
+	
+	// every time update the end of run timestamp to this event's timestamp.
+	runend.tm_year = HEADER->ndaysk[0] - 1900;
+	runend.tm_mon = HEADER->ndaysk[1] - 1;
+	runend.tm_mday = HEADER->ndaysk[2];
+	runend.tm_hour = HEADER->ntimsk[0];
+	runend.tm_min = HEADER->ntimsk[1];
+	runend.tm_sec = HEADER->ntimsk[2];
+	
 	// find lowe events ✅
 	// for reference, paper says 54,963 beta events... though not clear after which cuts
 	
-	// n_hits_with_Q_lt_0.5pe / n_hits_total > 0.55
-	Log(toolName+" checking SNR cut",v_debug+1,verbosity);
-	if((double)thirdredvars->q50 / (double)(LOWE->bsn50) > 2.) return false;   // is this the right cut? XXX
-	myTreeSelections.AddPassingEvent("SNR>0.5");
+//	// n_hits_with_Q_lt_0.5pe / n_hits_total > 0.55
+//	Log(toolName+" checking SNR cut",v_debug+1,verbosity);
+//	// TODO how is this implemented...? (supposedly already applied as part of first reduction)
+//	myTreeSelections.AddPassingEvent("SNR>0.5");
+	
+//	// Q50/N50 cut is something different-  not mentioned by paper, is this another of sonia's additional cuts?
+//	if((double)thirdredvars->q50 / (double)(LOWE->bsn50) > 2.) return false;
+//	myTreeSelections.AddPassingEvent("Q50/N50>0.5");
 	
 	// dwall > 2m
 	Log(toolName+" checking dwall cut",v_debug+1,verbosity);
@@ -359,7 +402,7 @@ bool PurewaterLi9Rate::Analyse(){
 		myTreeSelections.AddPassingEvent("dlt_mu_lowe>200cm", mu_i);
 		
 		// That's all for assessing the amount of general spallation isotopes
-		// --------------------------------------------------------------
+		// ------------------------------------------------------------------
 		// for Li9 we have a number of additional cuts
 		
 		// apply Li9 energy range cut

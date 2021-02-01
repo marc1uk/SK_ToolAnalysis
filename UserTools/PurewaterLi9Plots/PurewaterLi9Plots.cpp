@@ -1,3 +1,4 @@
+/* vim:set noexpandtab tabstop=4 wrap */
 #include "PurewaterLi9Plots.h"
 
 #include "TROOT.h"
@@ -12,6 +13,8 @@
 #include "TGraphErrors.h"
 #include "TAxis.h"
 #include "TF1.h"
+#include "TFitResult.h"
+#include "TFitResultPtr.h"
 #include "TMath.h"
 #include "TString.h"
 #include "TSpline.h"
@@ -22,7 +25,6 @@
 //#include "Fit/BinData.h"
 #include "Fit/UnBinData.h"
 //#include "Fit/Chi2FCN.h"
-#include "Fit/FitResult.h"
 //#include "Fit/DataOptions.h"
 #include "Fit/FitConfig.h"
 
@@ -50,7 +52,96 @@ const std::map<std::string,double> lifetimes{  // from 2015 paper, seconds
 	{"14B",0.02},
 	{"12N",0.016},
 	{"13O",0.013},
-	{"11Li",0.012}
+	{"11Li",0.012},
+	{"ncapture",204.8E-6}
+};
+
+const std::map<std::string,double> papervals{  // from 2015 paper plot at t->0, represents Ni/τi, with τi in units of 0.006s
+	{"11Be",28},
+	{"16N",450},
+	{"15C",80},
+	{"8Li",350},
+	{"8B",580},
+	{"16C",0},
+	{"9Li",350},
+	{"9C",75},  // paired, half 150
+	{"8He",75}, // paired with above
+	{"12Be",0},
+	{"12B",75000},
+	{"13B",0},
+	{"14B",0},
+	{"12N",25000},
+	{"13O",0},
+	{"11Li",0},
+	{"const",330},
+	// for the comparison function
+	{"8He_9C",150},
+	{"8Li_8B",930}
+};
+
+const std::map<std::string,double> papervals2{  // from 2015 paper table II, converted w/ eqn 2, divided by isotope lifetime in units 0.006s to be consistent with above... TODO; remove the scaling by lifetime and use papervals3
+	{"11Be",0},
+	{"16N",443},
+	{"15C",0},
+	{"8Li",375},
+	{"8B",489},
+	{"16C",0},
+	{"9Li",346},
+	{"9C",0},
+	{"8He",0},
+	{"12Be",0},
+	{"12B",79264},
+	{"13B",0},
+	{"14B",0},
+	{"12N",25094},
+	{"13O",0},
+	{"11Li",0},
+	{"const",330},   // not in table, use value from plot
+	// for the comparison function
+	{"8He_9C",0},
+	{"8Li_8B",432}
+};
+
+const std::map<std::string,double> papervals3{  // from 2015 paper table II, converted w/ eqn 2
+	{"11Be",0},
+	{"16N",759709},
+	{"15C",0},
+	{"8Li",75532},
+	{"8B",90533},
+	{"16C",0},
+	{"9Li",15002},
+	{"9C",0},
+	{"8He",0},
+	{"12Be",0},
+	{"12B",383107},
+	{"13B",0},
+	{"14B",0},
+	{"12N",66917},
+	{"13O",0},
+	{"11Li",0},
+	{"const",330},   // not in table, use value from plot
+	// for the comparison function
+	{"8He_9C",0},
+	{"8Li_8B",465}
+};
+
+const std::map<std::string,double> efficiencies{  // from FLUKA
+	{"11Be",38.1},
+	{"16N",45.0},
+	{"15C",31.8},
+	{"8Li",42.8},
+	{"8B",51.3},
+	{"16C",0},
+	{"9Li",39.2},
+	{"9C",50.2},  // paired, half 150
+	{"8He",22.2}, // paired with above
+	{"12Be",0},
+	{"12B",45.5},
+	{"13B",0},
+	{"14B",0},
+	{"12N",56.2},
+	{"13O",0},
+	{"11Li",0}
 };
 
 PurewaterLi9Plots::PurewaterLi9Plots():Tool(){
@@ -77,12 +168,21 @@ bool PurewaterLi9Plots::Initialise(std::string configfile, DataModel &data){
 	m_variables.Get("topCutName",topCutName);          // first cut we need to see every passing event from.
 	m_variables.Get("valuesFileMode",valuesFileMode);  // "write", "read", <anything else>="neither"
 	m_variables.Get("valuesFile",valuesFile);          // BoostStore file
+	m_variables.Get("bdt_outfile",bdt_outfile);        // ROC curves for the ntag BDT
 	//* unused when an upstream tool is driving the toolchain
 	//* when using values from a BoostStore the ROOT files do not need to be read
 	
 	// cut thresholds
 	m_variables.Get("li9_lifetime_dtmin",li9_lifetime_dtmin);
 	m_variables.Get("li9_lifetime_dtmax",li9_lifetime_dtmax);
+	m_variables.Get("li9_ncapture_dtmin",ncap_dtmin);
+	m_variables.Get("li9_ncapture_dtmax",ncap_dtmax);
+	
+	// hacky way to scale the total number of events when comparing to the paper plots
+	m_variables.Get("paper_scaling",paper_scaling);
+	
+	// energy threshold efficiencies, from FLUKA
+	m_variables.Get("efficienciesFile",efficienciesFile);
 	
 	// get the TApplication if we want to show plots on the fly
 	m_variables.Get("show_plots",show_plots);
@@ -118,6 +218,9 @@ bool PurewaterLi9Plots::Initialise(std::string configfile, DataModel &data){
 		}
 		first_entry=entry_number; // debug print only
 	}
+	
+	// read efficiencies of the different thresholds of old vs new data
+	GetEnergyCutEfficiencies();
 	
 	return true;
 }
@@ -329,6 +432,12 @@ bool PurewaterLi9Plots::Analyse(){
 	for(size_t mu_i : spall_mu_indices){
 		// record the distribution of dt_mu_lowe
 		Log(toolName+" filling mu->lowe dt distribution for spallation entries",v_debug+2,verbosity);
+		// this *should* only contain pre muons with dt < 0:
+		if(dt_mu_lowe[mu_i]>0){
+			Log(toolName+" error! Spallation muon with time "+toString(dt_mu_lowe[mu_i])+" after lowe event!",
+				v_warning,verbosity);
+			continue;
+		}
 		dt_mu_lowe_vals.push_back(dt_mu_lowe[mu_i]);  // FIXME weight by num_pre_muons
 		// in finalise we'll fit this distribution to estimate the number of events from each isotope
 		
@@ -346,7 +455,13 @@ bool PurewaterLi9Plots::Analyse(){
 		// Zhang had no events with >1 ntag candidate: should we only take the first? XXX
 		for(size_t neutron_i=0; neutron_i<num_neutron_candidates; ++neutron_i){
 			if(myTreeSelections->GetPassesCut("mu_lowe_ntag_triplets",{mu_i, neutron_i})){
-				li9_ntag_dt_vals.push_back(dt_lowe_n[neutron_i]);
+				double ncap_time = dt_lowe_n[neutron_i];  // these times are in nanoseconds
+				// according to sonias code we need to account for some offset of the AFT trigger timestamps?
+				// "Remove 10mus time shift for AFT events and convert time to microseconds"
+				// doesn't seem to tie up with what this is actually doing, though
+				// adjusted too instead convert presumably ms, to seconds for consistency
+				double ncap_time_adjusted = ncap_time < 50000 ? ncap_time : ncap_time - 65000;
+				li9_ntag_dt_vals.push_back(ncap_time_adjusted/1E9);
 			}
 		}
 		
@@ -371,6 +486,7 @@ bool PurewaterLi9Plots::Finalise(){
 	if(valuesFileMode=="write"){
 		// set all the values into the BoostStore
 		valueStore = new BoostStore(true,constants::BOOST_STORE_BINARY_FORMAT);
+		valueStore->Set("livetime",livetime);
 		valueStore->Set("dlt_vals_pre",dlt_vals_pre);
 		valueStore->Set("dt_vals_pre",dt_vals_pre);
 		valueStore->Set("dlt_vals_post",dlt_vals_post);
@@ -405,6 +521,7 @@ bool PurewaterLi9Plots::Finalise(){
 	} else if(valuesFileMode=="read"){
 		valueStore = new BoostStore(true,constants::BOOST_STORE_BINARY_FORMAT);
 		valueStore->Initialise(valuesFile.c_str());
+		valueStore->Get("livetime",livetime);
 		valueStore->Get("dlt_vals_pre",dlt_vals_pre);
 		valueStore->Get("dt_vals_pre",dt_vals_pre);
 		valueStore->Get("dlt_vals_post",dlt_vals_post);
@@ -448,19 +565,19 @@ bool PurewaterLi9Plots::Finalise(){
 	PlotMuonDt();
 	PlotMuonDlt();
 	
-	// this is for candidates that pass the dlt cut
+	// this is for candidates that pass the dlt cut: compare to paper fig 3
 	Log(toolName+" making plots of spallation Dt distributions",v_debug,verbosity);
 	PlotSpallationDt();
 	
 	// mu-lowe time diff for li9 triplet candidates: compare to paper Fig 6
 	Log(toolName+" making plot of Li9 candidates Dt distribution",v_debug,verbosity);
-	PlotLi9TripletsDt();
+	PlotLi9LifetimeDt();
 	
 	Log(toolName+" making plots of Li9 candidate beta spectrum",v_debug,verbosity);
 	PlotLi9BetaEnergy();
 	
 	Log(toolName+" making plot of Li9 ncapture Dt distribution",v_debug,verbosity);
-	PlotLi9NtagDt();
+	PlotNcaptureDt();
 	
 	// measure dlt cut systematic TODO
 //	MeasureDltSystematic(); // using variation in dlt_systematic_dt_cuts in bin corresponding to dlt=200cm
@@ -490,29 +607,35 @@ bool PurewaterLi9Plots::Finalise(){
 	return true;
 }
 
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// =====================================================================
+
 bool PurewaterLi9Plots::PlotMuonDlt(){
 	
 	THStack my_spall_dlts;
 	// make histograms of transverse distance to muon for all pre- and post-muons
 	// and their difference to extract the spallation distributions
-	for(int mu_class_i=0; mu_class_i<6; ++mu_class_i){  // we have 5 muboy classifications
+	for(auto&& aclass : constants::muboy_class_to_name){  // we have 5 muboy classifications
+		int mu_class_i = aclass.first;
+		const char* mu_class_name = aclass.second.c_str();
 		TH1F ahist_pre(TString::Format("dlt_pre_%d",mu_class_i),
-					     "All Pre-Muon to Low-E Transverse Distances",20,0,400);
+					     "All Pre-Muon to Low-E Transverse Distances",8,0,400);
 		for(auto&& aval : dlt_vals_pre.at(mu_class_i)) ahist_pre.Fill(aval);
 		ahist_pre.Write();
 		
 		TH1F ahist_post(TString::Format("dlt_post_%d",mu_class_i),
-					     "All Post-Muon to Low-E Transverse Distances",20,0,400);
+					     "All Post-Muon to Low-E Transverse Distances",8,0,400);
 		for(auto&& aval : dlt_vals_post.at(mu_class_i)) ahist_post.Fill(aval);
 		ahist_post.Write();
 		
-		TH1F* dlt_hist_spall = (TH1F*)ahist_pre.Clone(TString::Format("dlt_spall_%d",mu_class_i));
+		TH1F* dlt_hist_spall = (TH1F*)ahist_pre.Clone(TString::Format("dlt_spall_%s",mu_class_name));
 		dlt_hist_spall->Reset(); // clear entries
 		// subtract post from pre
 		dlt_hist_spall->Add(&ahist_pre,&ahist_post,1,-1);
 		std::cout<<"subtracting "<<ahist_post.GetEntries()<<" post entries from "<<ahist_pre.GetEntries()
 				 <<" pre entries results in "<<dlt_hist_spall->GetEntries()<<" ("
 				 <<(ahist_pre.GetEntries()-ahist_post.GetEntries())<<") entries"<<std::endl;
+		dlt_hist_spall->Scale(1./dlt_hist_spall->Integral());
 		// XXX we seem to lose half our entries here....??
 		dlt_hist_spall->Write();
 		dlt_hist_spall->SetDirectory(0);
@@ -529,6 +652,9 @@ bool PurewaterLi9Plots::PlotMuonDlt(){
 	
 	return true;
 }
+
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// =====================================================================
 
 bool PurewaterLi9Plots::PlotMuonDt(){
 	// make histograms of time difference to muon for all pre- and post-muons
@@ -591,163 +717,441 @@ bool PurewaterLi9Plots::PlotMuonDt(){
 	return true;
 }
 
+// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// =====================================================================
+
 bool PurewaterLi9Plots::PlotSpallationDt(){
 	// dt distribution of muons passing dlt<200cm cut
-	TH1F dt_mu_lowe_hist("dt_mu_lowe_hist","Spallation Muon to Low-E Time Differences",500,0,30);
+	TH1F dt_mu_lowe_hist("dt_mu_lowe_hist","Spallation Muon to Low-E Time Differences",5000,0,30);
 	TH1F dt_mu_lowe_hist_short("dt_mu_lowe_hist_short","Spallation Muon to Low-E Time Differences",500,0,0.25);
 	for(auto&& aval : dt_mu_lowe_vals){
+		if(aval>0) continue;  // only fit preceding muons (true spallation)
 		dt_mu_lowe_hist.Fill(fabs(aval));
 		dt_mu_lowe_hist_short.Fill(fabs(aval));
 	}
 	dt_mu_lowe_hist.Write();
 	dt_mu_lowe_hist_short.Write();
 	
+	// make a histo with equally spaced bins in log scale
+	// we need to fit the same histogram (with the same binning) for the intermediate fits,
+	// otherwise the bin widths change, the contents change, and the fit parameters aren't the same.
+	// 5000 bins gives chi2/NDOF that matches the paper.
+	int nbins=5000;
+	std::vector<double> binedges = MakeLogBins(0.001, 30, nbins+1);
+	TH1F dt_mu_lowe_hist_log("dt_mu_lowe_hist_log","Data;dt(s);Events/0.006 s",
+							 nbins, binedges.data());
+	for(auto&& aval : dt_mu_lowe_vals){ if(aval>0) continue; dt_mu_lowe_hist_log.Fill(fabs(aval)); }
+	// scale each bin by its width to correct back to number of events per equal time interval
+	for(int bini=1; bini<dt_mu_lowe_hist_log.GetNbinsX()+1; ++bini){
+		// numbers here are from binning of dt_mu_lowe_hist
+		dt_mu_lowe_hist_log.SetBinContent(bini,
+			dt_mu_lowe_hist_log.GetBinContent(bini)/(dt_mu_lowe_hist_log.GetBinWidth(bini)/(30./5000.)));
+	}
+//	std::cout<<"this plot will be used for all the time distribution fits:"<<std::endl;
+//	dt_mu_lowe_hist_log.Draw();
+//	gPad->WaitPrimitive();
+	
 	// fit this with all the rates....
 	// we do the fitting in 5 stages, initially fitting sub-ranges of the distribution
-	for(int i=0; i<5; ++i) FitSpallationDt(dt_mu_lowe_hist, i);
-	// cleanup
-	for(auto&& afunc : fitfuncs) delete afunc.second;
-	fitfuncs.clear();
+	for(int i=0; i<5; ++i) FitSpallationDt(dt_mu_lowe_hist, dt_mu_lowe_hist_log, i);
 	
+	// the yield across the whole energy range is obtained from the fit amplitude via:
+	// Yi = Ni / (Rmu * T * rho * Lmu)
+	// where Rmu is the muon rate, T the live time, rho the density of water and Lmu the
+	// measured path length of the muon track...? is this event-wise? Yield... maybe.
+	
+	// the production rate integrated over the whole energy range is given by:
+	// Ri = Ni / (FV * T * eff_i)
+	// where FV is the fid vol and T again live time.
+	// note this is using the paper definiton, not zhangs definition. just changes defn of Ni<->Ni*eff_i
+	std::map<std::string,double> rates;
+	for(auto&& anisotope : fit_amps){
+		std::string isotope = anisotope.first;
+		if(isotope.substr(0,5)=="const") continue;
+		// we need to know the efficiency of the selection, which is obtained
+		// from the fraction of beta spectrum that's below 6MeV
+		std::cout<<"getting efficiency of "<<isotope<<std::endl;
+		if(isotope.find("_")==std::string::npos){
+			double efficiency = efficiencies.at(anisotope.first);
+			rates[anisotope.first] = anisotope.second/efficiency * (fiducial_vol / livetime);
+			std::cout<<"efficiency of "<<anisotope.first<<", Rate of production is "<<rates[anisotope.first]
+					 <<"/kton/day"<<std::endl;
+		} else {
+			std::string first_isotope = isotope.substr(0,isotope.find_first_of("_"));
+			std::string second_isotope = isotope.substr(isotope.find_first_of("_")+1,std::string::npos);
+			double first_efficiency = efficiencies.at(first_isotope);
+			double second_efficiency = efficiencies.at(second_isotope);
+			rates[first_isotope] = anisotope.second/first_efficiency * (fiducial_vol / livetime);
+			rates[second_isotope] = anisotope.second/second_efficiency * (fiducial_vol / livetime);
+			std::cout<<"efficiency of "<<first_isotope<<" is "<<first_efficiency
+					 <<", calculated rate of production is "<<rates[first_isotope]
+					 <<"/kton/day"<<std::endl
+					 <<", efficiency of "<<second_isotope<<" is "<<second_efficiency
+					 <<", calculated rate of production is "<<rates[second_isotope]
+					 <<"/kton/day"<<std::endl;
+		}
+	}
+	// TODO save this map to an ouput file
+	// not worth doing till we re-run and determine the livetime
 	return true;
 }
 
-bool PurewaterLi9Plots::FitSpallationDt(TH1F& dt_mu_lowe_hist, int rangenum){
+std::vector<double> PurewaterLi9Plots::MakeLogBins(double xmin, double xmax, int nbins){
+	std::vector<double> binedges(nbins+1);
+	double xxmin=log10(xmin);
+	double xxmax = log10(xmax);
+	for(int i=0; i<nbins; ++i){
+		binedges[i] = pow(10,xxmin + (double(i)/(nbins-1.))*(xxmax-xxmin));
+	}
+	binedges[nbins+1] = xmax; // required
+	return binedges;
+}
+
+bool PurewaterLi9Plots::FitSpallationDt(TH1F& dt_mu_lowe_hist, TH1F& dt_mu_lowe_hist_log, int rangenum){
 	// do sub-range fitting based on section B of the 2015 paper
 	// formula 1 from the paper, with a sub-range as described in section B2
 	// we have 4 sub-ranges to fit
 	switch (rangenum){
 	case 0:{
 		// fit range 50us -> 0.1s with 12B + 12N only
-		// make a temporary histo to fit over this range so we use suitable binning?
-		TH1F hist_to_fit("hist_to_fit","Spallation Muon to Low-E Time Differences",100,50e-6,0.1);
-		for(auto&& aval : dt_mu_lowe_vals) hist_to_fit.Fill(fabs(aval));
-		// make the functions for each isotope we're fitting this time and fix the lifetimes
-		fitfuncs.emplace("12B",new TF1{"f_12B","([0]/[1])*exp(-x/[1])+[2]"});
-		fitfuncs.emplace("12N",new TF1{"f_12N","([0]/[1])*exp(-x/[1])+[2]"});
-		SetParameterNames("12B");
-		SetParameterNames("12N");
-		// make a sum function which we'll fit
-		TF1 func_sum("f_case1","f_12B + f_12N");
-//		fitfuncs.emplace("12B",BuildFunction({"12B","12N"}));
-		std::cout<<"par names of case1 are "<<std::endl;
-		for(int i=0; i<func_sum.GetNpar(); ++i){
-			std::cout<<i<<" = "<<func_sum.GetParName(i)<<std::endl;
-		}
-		// fix the isotope lifetimes. Values and fix flags do not get inherited
-		// by the sum function, so there's no point setting them in the component TF1s. :(
-		std::cout<<"fixing lifetimes"<<std::endl;
-		FixLifetime(func_sum,"12B");
-		FixLifetime(func_sum,"12N");
+//		TH1F hist_to_fit("hist_to_fit","Spallation Muon to Low-E Time Differences",100,50e-6,0.1);
+//		for(auto&& aval : dt_mu_lowe_vals){ if(aval>0) continue; hist_to_fit.Fill(fabs(aval)); }
+		// make the function which we'll fit
+		std::cout<<"calling BuildFunction for case "<<rangenum<<", 12B+12N"<<std::endl;
+		TF1 func_sum = BuildFunction({"12B","12N"},50e-6,0.1);
 		// do the fit
-		hist_to_fit.Fit(&func_sum,"","",50e-6,0.1);
+		std::cout<<"fitting"<<std::endl;
+//		hist_to_fit.Fit(&func_sum,"","",50e-6,0.1);
+		dt_mu_lowe_hist_log.Fit(&func_sum,"R","",50e-6,0.1);
 		// record the results for the next step
 		std::cout<<"recording fit results"<<std::endl;
 		PushFitAmp(func_sum,"12B");
 		PushFitAmp(func_sum,"12N");
-		hist_to_fit.Draw();
-		gPad->WaitPrimitive();
+		fit_amps["const_0"] = func_sum.GetParameter("const");
+		std::cout<<"recorded results were: "<<std::endl
+				 <<"12B: "<<fit_amps["12B"]<<std::endl
+				 <<"12N: "<<fit_amps["12N"]<<std::endl
+				 <<"const_0: "<<fit_amps["const_0"]<<std::endl;
+//		hist_to_fit.Draw();
+		dt_mu_lowe_hist_log.Draw();
+		//gPad->WaitPrimitive();
+		dt_mu_lowe_hist_log.GetListOfFunctions()->Clear();
 		break;
 		}
-		// OK!
 	case 1:{
 		// fit range 6-30s with 16N + 11B only
-		TH1F hist_to_fit("hist_to_fit","Spallation Muon to Low-E Time Differences",100,6,30);
-		for(auto&& aval : dt_mu_lowe_vals) hist_to_fit.Fill(fabs(aval));
-		fitfuncs.emplace("16N",new TF1{"f_16N","([0]/[1])*exp(-x/[1])+[2]",0,30});
-		fitfuncs.emplace("11Be",new TF1{"f_11Be","([0]/[1])*exp(-x/[1])+[2]",0,30});
-		SetParameterNames("16N");
-		SetParameterNames("11Be");
-		TF1 func_sum("f_case2","f_16N + f_11Be",0,30);
-		FixLifetime(func_sum,"16N");
-		FixLifetime(func_sum,"11Be");
-		hist_to_fit.Fit(&func_sum,"","",6,30);
+//		TH1F hist_to_fit("hist_to_fit","Spallation Muon to Low-E Time Differences",100,6,30);
+//		for(auto&& aval : dt_mu_lowe_vals){ if(aval>0) continue; hist_to_fit.Fill(fabs(aval)); }
+		std::cout<<"calling BuildFunction for case "<<rangenum<<", 16N+11Be"<<std::endl;
+		TF1 func_sum = BuildFunction({"16N","11Be"},6,30);
+		std::cout<<"fitting"<<std::endl;
+//		hist_to_fit.Fit(&func_sum,"","",6,30);
+		dt_mu_lowe_hist_log.Fit(&func_sum,"R","",6,30);
 		// record the results for the next step
+		std::cout<<"recording the fit results"<<std::endl;
 		PushFitAmp(func_sum,"16N");
 		PushFitAmp(func_sum,"11Be");
-		hist_to_fit.Draw();
-		gPad->WaitPrimitive();
+		fit_amps["const_1"] = func_sum.GetParameter("const");
+		std::cout<<"recorded results were: "<<std::endl
+				 <<"16N: "<<fit_amps["16N"]<<std::endl
+				 <<"11Be: "<<fit_amps["11Be"]<<std::endl
+				 <<"const_1: "<<fit_amps["const_1"]<<std::endl;
+//		hist_to_fit.Draw();
+		dt_mu_lowe_hist_log.Draw();
+		//gPad->WaitPrimitive();
+		dt_mu_lowe_hist_log.GetListOfFunctions()->Clear();
 		break;
 		}
-		// OK!
 	case 2:{
 		// fit the range 0.1-0.8s with the components previously fit now fixed,
-		TH1F hist_to_fit("hist_to_fit","Spallation Muon to Low-E Time Differences",100,0.1,0.8);
-		for(auto&& aval : dt_mu_lowe_vals) hist_to_fit.Fill(fabs(aval));
+//		TH1F hist_to_fit("hist_to_fit","Spallation Muon to Low-E Time Differences",100,0.1,0.8);
+//		for(auto&& aval : dt_mu_lowe_vals){ if(aval>0) continue; hist_to_fit.Fill(fabs(aval)); }
 		// allowing additional components Li9 + a combination of 8He+9C
-		fitfuncs.emplace("9Li",new TF1{"f_9Li","([0]/[1])*exp(-x/[1])+[2]",0,30});
-		fitfuncs.emplace("8He_9C",
-				new TF1{"f_8He_9C", "([0]/2.)*(exp(-x/[1])/[1]+exp(-x/[2])/[2])+[3]",0,30});
-		fitfuncs.emplace("8Li_8B",
-				new TF1{"f_8Li_8B","([0]/2.)*(exp(-x/[1])/[1]+exp(-x/[2])/[2])+[3]",0,30});
-		SetParameterNames("9Li");
-		SetParameterNames("8He","9C");
-		SetParameterNames("8Li","8B");
-		TF1 func_sum("f_case3","f_9Li + f_8He_9C + f_8Li_8B + f_12B + f_12N + f_16N + f_11Be",0,30);
-		// fix lifetimes
-		FixLifetime(func_sum,"9Li");
-		FixLifetime(func_sum,"8He");
-		FixLifetime(func_sum,"9C");
-		FixLifetime(func_sum,"8Li");
-		FixLifetime(func_sum,"8B");
-		FixLifetime(func_sum,"12B");
-		FixLifetime(func_sum,"12N");
-		FixLifetime(func_sum,"16N");
-		FixLifetime(func_sum,"11Be");
+		std::cout<<"calling BuildFunction for case "<<rangenum<<", 9Li+8He_9C+8Li_8B+12B+12N+16N+11Be"<<std::endl;
+		TF1 func_sum = BuildFunction({"9Li","8He_9C","8Li_8B","12B","12N","16N","11Be"},0.1,0.8);
+		std::cout<<"retrieving past results"<<std::endl;
 		// pull fit results from the last two stages
 		PullFitAmp(func_sum,"12B");
 		PullFitAmp(func_sum,"12N");
 		PullFitAmp(func_sum,"16N");
 		PullFitAmp(func_sum,"11Be");
 		// fit the new components
-		hist_to_fit.Fit(&func_sum,"","",0.1,0.8);
+		std::cout<<"fitting"<<std::endl;
+//		hist_to_fit.Fit(&func_sum,"","",0.1,0.8);
+		dt_mu_lowe_hist_log.Fit(&func_sum,"R","",0.1,0.8);
 		// record the results for the next step
+		std::cout<<"recording the fit results"<<std::endl;
 		PushFitAmp(func_sum,"9Li");
 		PushFitAmp(func_sum,"8He_9C");
 		PushFitAmp(func_sum,"8Li_8B");
-		hist_to_fit.Draw();
-		gPad->WaitPrimitive();
+		fit_amps["const_2"] = func_sum.GetParameter("const");
+		std::cout<<"recorded results were: "<<std::endl
+				 <<"9Li: "<<fit_amps["9Li"]<<std::endl
+				 <<"8He_9C: "<<fit_amps["8He_9C"]<<std::endl
+				 <<"8Li_8B: "<<fit_amps["8Li_8B"]<<std::endl
+				 <<"const_2: "<<fit_amps["const_2"]<<std::endl;
+//		hist_to_fit.Draw();
+		dt_mu_lowe_hist_log.Draw();
+		//gPad->WaitPrimitive();
+		dt_mu_lowe_hist_log.GetListOfFunctions()->Clear();
+		
+		// debug check, let's see what's going on here
+		std::cout<<"Drawing past fits and this one, to see how they look"<<std::endl;
+		TF1 func_early = BuildFunction({"12B","12N"},50E-6,30);
+		// pull fit results from the last two stages
+		PullFitAmp(func_early,"12B");
+		PullFitAmp(func_early,"12N");
+		PullFitAmp(func_early,"const_0");
+		func_early.SetLineColor(kBlue);
+		std::cout<<"early"<<std::endl;
+		func_early.Draw();
+		//gPad->WaitPrimitive();
+		TF1 func_late = BuildFunction({"16N","11Be"},50E-6,30);
+		// pull fit results from the last two stages
+		PullFitAmp(func_late,"16N");
+		PullFitAmp(func_late,"11Be");
+		PullFitAmp(func_late,"const_1");
+		func_late.SetLineColor(kGreen-1);
+		std::cout<<"late"<<std::endl;
+		func_late.Draw();
+		//gPad->WaitPrimitive();
+		
+		func_sum.SetRange(50E-6,30);
+		std::cout<<"int"<<std::endl;
+		func_sum.Draw();
+		//gPad->WaitPrimitive();
+		
+		std::cout<<"everything"<<std::endl;
+		dt_mu_lowe_hist_log.Draw();
+		func_sum.Draw("same");
+		func_early.Draw("same");
+		func_late.Draw("same");
+		//gPad->WaitPrimitive();
+		
 		break;
 		}
-		// XXX not ok, fit terminated. Many parameters.... 
 	case 3:{
 		// fit the range 0.8-6s with the components previously fit now fixed,
-		TH1F hist_to_fit("hist_to_fit","Spallation Muon to Low-E Time Differences",100,0.8,6);
-		for(auto&& aval : dt_mu_lowe_vals) hist_to_fit.Fill(fabs(aval));
+//		TH1F hist_to_fit("hist_to_fit","Spallation Muon to Low-E Time Differences",100,0.8,6);
+//		for(auto&& aval : dt_mu_lowe_vals){ if(aval>0) continue; hist_to_fit.Fill(fabs(aval)); }
 		// allowing additional components 15C + 16N
-		fitfuncs.emplace("15C",new TF1{"f_15C","([0]/[1])*exp(-x/[1])+[2]",0,30});
-		fitfuncs.emplace("16N",new TF1{"f_16N","([0]/[1])*exp(-x/[1])+[2]",0,30});
-		SetParameterNames("15C");
-		SetParameterNames("16N");
-		TF1 func_sum("f_case1","f_15C + f_16N + f_8Li_8B",0,30);
-		FixLifetime(func_sum,"15C");
-		FixLifetime(func_sum,"16N");
-		FixLifetime(func_sum,"8Li");
-		FixLifetime(func_sum,"8B");
-		hist_to_fit.Fit(&func_sum,"","",0.8,6);
+		std::cout<<"calling BuildFunction for case "<<rangenum<<", 15C+16N+8Li_8B"<<std::endl;
+		TF1 func_sum = BuildFunction({"15C","16N","8Li_8B"},0.8,6);
+		std::cout<<"retrieving past results"<<std::endl;
+		PullFitAmp(func_sum,"8Li_8B");
+		// fit the new components
+		std::cout<<"fitting"<<std::endl;
+//		hist_to_fit.Fit(&func_sum,"","",0.8,6);
+		dt_mu_lowe_hist_log.Fit(&func_sum,"R","",0.8,6);
 		// record the results for the next step
+		std::cout<<"recording fit results"<<std::endl;
 		PushFitAmp(func_sum,"15C");
 		PushFitAmp(func_sum,"16N");
-		hist_to_fit.Draw();
-		gPad->WaitPrimitive();
+		fit_amps["const_3"] = func_sum.GetParameter("const");
+//		hist_to_fit.Draw();
+		dt_mu_lowe_hist_log.Draw();
+		//gPad->WaitPrimitive();
+		dt_mu_lowe_hist_log.GetListOfFunctions()->Clear();
 		break;
 		}
 	case 4:{
 		// final case: release all the fixes but keep the previously fit values as starting points.
-		std::string sum_func_formula="";
-		for(auto&& apair : fitfuncs){
-			TF1* afunc = apair.second;
-			for(int i=0; i<afunc->GetNpar(); ++i){
-				afunc->ReleaseParameter(i);
-			}
-			sum_func_formula = (sum_func_formula=="") ? afunc->GetName() : sum_func_formula+"+"+afunc->GetName();
-		}
-		TF1 func_sum("f_case5",sum_func_formula.c_str(),0,30);
-		dt_mu_lowe_hist.Fit(&func_sum,"","",0,30);
+		std::cout<<"calling BuildFunction for case "<<rangenum<<", everything"<<std::endl;
+		TF1 func_sum = BuildFunction({"12B","12N","16N","11Be","9Li","8He_9C","8Li_8B","15C"},0,30);
+		func_sum.SetLineColor(kRed);
+		std::cout<<"retrieving past results"<<std::endl;
+		PullFitAmp(func_sum,"12B",false);
+		PullFitAmp(func_sum,"12N",false);
+		PullFitAmp(func_sum,"16N",false);
+		PullFitAmp(func_sum,"11Be",false);
+		PullFitAmp(func_sum,"9Li",false);
+		PullFitAmp(func_sum,"8He_9C",false);
+		PullFitAmp(func_sum,"8Li_8B",false);
+		PullFitAmp(func_sum,"15C",false);
 		
-		TCanvas c1;
-		dt_mu_lowe_hist.Draw();
+		/*
+		// make a histo with equally spaced bins in log scale
+		std::vector<double> binedges = MakeLogBins(0.001, 30, 100+1);
+		TH1F hist_to_fit("hist_to_fit","Spallation Muon to Low-E Time Differences",100, binedges.data());
+		for(auto&& aval : dt_mu_lowe_vals){ if(aval>0) continue; hist_to_fit.Fill(fabs(aval)); }
+		// scale each bin by its width to correct back to number of events per equal time interval
+		for(int bini=1; bini<hist_to_fit.GetNbinsX()+1; ++bini){
+			// numbers here are from binning of dt_mu_lowe_hist
+			hist_to_fit.SetBinContent(bini,hist_to_fit.GetBinContent(bini)/(hist_to_fit.GetBinWidth(bini)/(30./5000.)));
+		}
+		*/
+		std::cout<<"fitting"<<std::endl;
+//		dt_mu_lowe_hist.Fit(&func_sum,"","",0,30);   // do not fit to the logarithmic binning right away
+		TFitResultPtr fitresult =  dt_mu_lowe_hist_log.Fit(&func_sum,"RS","",0,30);
+//		std::cout<<"drawing initial fit result"<<std::endl;
+//		hist_to_fit.SetLineColor(kRed);
+//		hist_to_fit.Draw();
+//		func_sum.Draw("same");
+//		dt_mu_lowe_hist.Draw("same");
+//		gPad->SetLogx();
+//		gPad->SetLogy();
+//		gPad->WaitPrimitive();
+		
+		std::cout<<"fixing pars"<<std::endl;
+		// we want to constrain the number of each isotope to be >0, which would
+		// mean putting a lower limit of 0 on the amplitude in the fit.
+		// unfortunately ROOT only lets us put both upper and lower limits (not just one)
+		// and Minuit doesn't like limits of 0 and 10E10 (all sorts of errors).
+		// So, we put no constraint on the parameter, but our function (from BuildFunction)
+		// only uses its magnitude. This means we end up with fit values that are negative,
+		// but resulting function is the same even if we fix the sign to positive. So.
+		// let's try to fix up this hack by setting all abundances positive as they should be
+		for(int pari=0; pari<func_sum.GetNpar(); ++pari){
+			std::string parname = func_sum.GetParName(pari);
+			if(parname.substr(0,9)=="lifetime_") continue; // skip lifetimes, they're good
+			
+//			// when adjusting fits interactively they're given a limit,
+//			// but it seems like they don't have one in code, so skip this
+//			double parmin, parmax;
+//			func_sum.GetParLimits(pari,parmin,parmax);
+//			double newupper = std::max(abs(parmin),abs(parmax));
+//			double parval = func_sum.GetParameter(pari);
+//			func_sum.SetParLimits(pari,parmin,newupper);
+//			func_sum.SetParameter(pari,abs(parval));
+//			func_sum.SetParLimits(pari,0,newupper);
+			
+			// much simpler in that case
+			func_sum.SetParameter(pari,abs(func_sum.GetParameter(pari)));
+		}
+		
+		/*
+		// redo the fit but this time to the logarithmic binned histogram
+		TFitResultPtr fitresult =  hist_to_fit.Fit(&func_sum,"S","",0,30); // option S, give us a fitresultptr
+//		// seems like this is necessary again - unnecessary as we're using the TFitResultPtr
+//		for(int pari=0; pari<func_sum.GetNpar(); ++pari){
+//			std::string parname = func_sum.GetParName(pari);
+//			if(parname.substr(0,9)=="lifetime_") continue; // skip lifetimes, they're good
+//			func_sum.SetParameter(pari,abs(func_sum.GetParameter(pari)));
+//		}
+		dt_mu_lowe_hist.GetListOfFunctions()->Clear(); // clear the old bad fit
+		hist_to_fit.Draw();
+		func_sum.Draw("same");
+		dt_mu_lowe_hist.Draw("same");
+		*/
+		dt_mu_lowe_hist_log.Draw();
+		gPad->SetLogx();
+		gPad->SetLogy();
+		
+		// since we're having issues, let's see how well the old results fit our data
+		TF1 func_paper = BuildFunction({"12B","12N","16N","11Be","9Li","8He_9C","8Li_8B","15C"},0,30);
+		// scale the paper down to be around the same num events as us, to ease comparison
+		std::cout<<"retrieving paper results"<<std::endl;
+		PullPaperAmp(func_paper,"12B",true,paper_scaling);
+		PullPaperAmp(func_paper,"12N",true,paper_scaling);
+		PullPaperAmp(func_paper,"16N",true,paper_scaling);
+		PullPaperAmp(func_paper,"11Be",true,paper_scaling);
+		PullPaperAmp(func_paper,"9Li",true,paper_scaling);
+		PullPaperAmp(func_paper,"8He_9C",true,paper_scaling);
+		//PullPaperAmp(func_paper,"8Li_8B",true,paper_scaling);
+		PullPaperAmp(func_paper,"8Li",true,paper_scaling);
+		PullPaperAmp(func_paper,"8B",true,paper_scaling);
+		PullPaperAmp(func_paper,"15C",true,paper_scaling);
+		PullPaperAmp(func_paper,"const",true,paper_scaling);
+		func_paper.SetLineColor(kViolet);
+		func_paper.Draw("same");
+		
+		gPad->Modified();
+		gPad->Update();
 		gPad->WaitPrimitive();
+		
+		std::cout<<"recording fit results"<<std::endl;
+		// for some reason TF1::GetParameter() is returning double values truncated to integer
+		// is this something that happens when we fix the sign?
+		PushFitAmp(func_sum,"12B");
+		PushFitAmp(func_sum,"12N");
+		PushFitAmp(func_sum,"16N");
+		PushFitAmp(func_sum,"11Be");
+		PushFitAmp(func_sum,"9Li");
+		PushFitAmp(func_sum,"8He_9C");
+		PushFitAmp(func_sum,"8Li_8B");
+		PushFitAmp(func_sum,"15C");
+		fit_amps["const_4"] = func_sum.GetParameter("const");
+		
+		// so i guess we'll use the TFitResultPtr as that seems to work...
+		for(auto&& anisotope : fit_amps){
+			if(anisotope.first.substr(0,5)=="const") continue; // not a real isotope
+			int par_number = func_sum.GetParNumber(("amp_"+anisotope.first).c_str());
+			double amp = fitresult->Parameter(par_number);
+			PushFitAmp(abs(amp),anisotope.first);
+			std::cout<<"We had "<<amp<<" "<<anisotope.first<<" decays"<<std::endl;
+		}
+		
+		// add the individual isotopic contributions to reproduce the old plot
+		std::vector<TF1> indiv_funcs;
+		indiv_funcs.reserve(fit_amps.size());
+		for(auto&& theisotope : fit_amps){
+			if(theisotope.first.substr(0,5)=="const") continue; // not a real isotope
+			std::cout<<"amplitude of isotope "<<theisotope.first<<" is "<<theisotope.second<<std::endl;
+			//if(theisotope.second<=0.) continue;
+			std::string anisotope = theisotope.first;
+			TF1 next_func = BuildFunction({anisotope},0,30);
+			PullFitAmp(next_func,anisotope);
+			next_func.SetLineColor(colourwheel.GetNextColour());
+			
+			// this lot might not be necessary ...? SetRangeUser wasn't working, but now it is...?
+			double ltime;
+			// setrangeuser doesn't seem to be working, so try constraining the x range
+			if(anisotope.find("_")==std::string::npos){
+				// not a pair
+				ltime = lifetimes.at(anisotope);
+			} else {
+				// pair of isotopes
+				// it's not possible to generically solve the necessary equation,
+				// but it should be good enough just take the average lifetime
+				std::string first_isotope = anisotope.substr(0,anisotope.find_first_of("_"));
+				std::string second_isotope = anisotope.substr(anisotope.find_first_of("_")+1,std::string::npos);
+				ltime = (lifetimes.at(first_isotope) + lifetimes.at(second_isotope)) / 2.;
+			}
+			double miny = 1E-2;  // must be less than the plot min or it gets cut off early
+			double maxx = -ltime * log(miny*(ltime/theisotope.second));
+			if(maxx<0) maxx = 30;
+			next_func.SetRange(0.0,maxx);
+			
+//			std::cout<<anisotope<<" has amplitude "<<theisotope.second<<std::endl;
+//			std::cout<<"drawing"<<std::endl;
+//			next_func.Draw();
+////			next_func.GetYaxis()->SetRangeUser(1E-4,1E3);
+//			gPad->Modified();
+//			gPad->Update();
+//			gPad->WaitPrimitive();
+			// this works, but it doesn't add them to the legend!!
+			//hist_to_fit.GetListOfFunctions()->Add(&indiv_funcs.back());
+			
+			indiv_funcs.push_back(next_func);
+			indiv_funcs.back().SetName(anisotope.c_str());
+			indiv_funcs.back().SetTitle(anisotope.c_str());
+		}
+		// and last but not least the constant background
+		TF1 constfunc("constfunc","[0]",0,30);
+		constfunc.SetParameter(0,fit_amps["const_4"]);
+		indiv_funcs.push_back(constfunc);
+		//hist_to_fit.GetListOfFunctions()->Add(&indiv_funcs.back());
+		indiv_funcs.back().SetName("const");
+		indiv_funcs.back().SetTitle("const");
+		
+		// draw it all
+		//hist_to_fit.Draw();
+		//hist_to_fit.GetYaxis()->SetRangeUser(1E-3,1E5);
+		dt_mu_lowe_hist_log.Draw();
+		dt_mu_lowe_hist_log.GetYaxis()->SetRangeUser(1.,1E5);
+		for(auto&& afunc : indiv_funcs){ std::cout<<"drawing "<<afunc.GetName()<<std::endl; afunc.Draw("same"); }
+		gStyle->SetOptStat(0);
+		gStyle->SetOptFit(0);
+		gPad->GetCanvas()->BuildLegend();
+		gPad->Modified();
+		gPad->Update();
+		//gPad->WaitPrimitive();
+		
+		// reproduce the paper plot including breakdowns, to check our value extraction
+		BuildPaperPlot();
+		
+		gPad->SetLogx(false);
+		gPad->SetLogy(false);
 		break;
 		}
 	default:
@@ -757,6 +1161,79 @@ bool PurewaterLi9Plots::FitSpallationDt(TH1F& dt_mu_lowe_hist, int rangenum){
 	return true;
 }
 
+void PurewaterLi9Plots::BuildPaperPlot(){
+	// add the individual isotopic contributions to reproduce the old plot
+	std::vector<TF1> indiv_funcs;
+	indiv_funcs.reserve(papervals.size());
+	for(auto&& theisotope : papervals){
+		if(theisotope.first.substr(0,5)=="const") continue; // not a real isotope
+		if(theisotope.second==0) continue; // do not add to plot isotopes with no abundance
+		// we also skip some isotopes since not all are plotted, and our map has some repeats
+		if((theisotope.first=="9C") || (theisotope.first=="8He") ||
+			//(theisotope.first=="8Li_8B")) continue;                         // if using papervals from plot
+			(theisotope.first=="8Li") || (theisotope.first=="8B")) continue;  // if using papervals from table
+		
+		std::cout<<"amplitude of isotope "<<theisotope.first<<" is "<<theisotope.second<<std::endl;
+		std::string anisotope = theisotope.first;
+		TF1 next_func = BuildFunction({anisotope},0,30);
+		
+		PullPaperAmp(next_func,anisotope,false);
+		next_func.SetLineColor(colourwheel.GetNextColour());
+		
+		indiv_funcs.push_back(next_func);
+		indiv_funcs.back().SetName(anisotope.c_str());
+		indiv_funcs.back().SetTitle(anisotope.c_str());
+	}
+	// and last but not least the constant background
+	TF1 constfunc("constfunc","[0]",0,30);
+	constfunc.SetParameter(0,papervals.at("const"));
+	indiv_funcs.push_back(constfunc);
+	indiv_funcs.back().SetName("const");
+	indiv_funcs.back().SetTitle("const");
+	
+	// now the sum of everything
+	TF1 func_paper = BuildFunction({"12B","12N","16N","11Be","9Li","8He_9C","8Li_8B","15C"},0.001,30);
+	func_paper.SetName("data");
+	func_paper.SetTitle("data");
+	std::cout<<"retrieving paper results"<<std::endl;
+	PullPaperAmp(func_paper,"12B",false);
+	PullPaperAmp(func_paper,"12N",false);
+	PullPaperAmp(func_paper,"16N",false);
+	PullPaperAmp(func_paper,"11Be",false);
+	PullPaperAmp(func_paper,"9Li",false);
+	PullPaperAmp(func_paper,"8He_9C",false);
+	PullPaperAmp(func_paper,"8Li_8B",false);
+	//PullPaperAmp(func_paper,"8Li",false);
+	//PullPaperAmp(func_paper,"8B",false);
+	PullPaperAmp(func_paper,"15C",false);
+	PullPaperAmp(func_paper,"const",false);
+	func_paper.SetLineColor(kViolet);
+	std::cout<<"Drawing paper total"<<std::endl;
+	func_paper.Draw();
+	func_paper.GetYaxis()->SetRangeUser(1.,3E7);
+//	gPad->Modified();
+//	gPad->Update();
+//	gPad->WaitPrimitive();
+	
+	// add all the components
+	for(auto&& afunc : indiv_funcs){
+		std::cout<<"drawing "<<afunc.GetName()<<std::endl;
+		afunc.Draw("same");
+//		gPad->Modified();
+//		gPad->Update();
+//		gPad->WaitPrimitive();
+	}
+	gStyle->SetOptStat(0);
+	gStyle->SetOptFit(0);
+	gPad->GetCanvas()->BuildLegend();
+	std::cout<<"Done, drawing paper Fig 3"<<std::endl;
+	gPad->Modified();
+	gPad->Update();
+	gPad->WaitPrimitive();
+	
+}
+
+// this is the true BuildFunction
 TF1 PurewaterLi9Plots::BuildFunction(std::vector<std::string> isotopes, double func_min, double func_max){
 	std::string total_func="";
 	std::string func_name="";
@@ -764,32 +1241,38 @@ TF1 PurewaterLi9Plots::BuildFunction(std::vector<std::string> isotopes, double f
 	int next_par_index=0;
 	for(std::string& anisotope : isotopes){
 		func_name += anisotope+"_";
+		std::cout<<"adding isotope "<<anisotope<<std::endl;
 		// first, this 'isotope' may be a degenerate pair, so try to split it apart
 		if(anisotope.find("_")==std::string::npos){
 			// not a pair
+			std::cout<<"not a pair"<<std::endl;
 			int first_index=next_par_index;
 			// "([0]/[1])*exp(-x/[1])"
-			std::string this_func =  "(["+toString(next_par_index++)
-									+"]/["+toString(next_par_index)
-									+"])*exp(-x/["+toString(next_par_index)+"])";
+			std::string this_func =  "(abs(["+toString(next_par_index)
+									+"])/["+toString(next_par_index+1)
+									+"])*exp(-x/["+toString(next_par_index+1)+"])";
+			next_par_index +=2;
 			// add this function to the total function string
 			total_func = (total_func=="") ? this_func : total_func+" + "+this_func;
 			// add the parameter names to our map
-			parameter_posns.emplace("amp_"+anisotope,first_index++);
-			parameter_posns.emplace("lifetime_"+anisotope,first_index);
+			parameter_posns.emplace("amp_"+anisotope,first_index);
+			parameter_posns.emplace("lifetime_"+anisotope,first_index+1);
 		} else {
 			// it's a pair. For now, only support two isotopes at a time.
+			std::cout<<"a pair, splitting into ";
 			std::string first_isotope = anisotope.substr(0,anisotope.find_first_of("_"));
 			std::string second_isotope = anisotope.substr(anisotope.find_first_of("_")+1,std::string::npos);
+			std::cout<<first_isotope<<" and "<<second_isotope<<std::endl;
 			// the fit function isn't just the sum of two single isotope functions
 			// as they share an amplitude and constant
-			//"[0]*(exp(-x/[1])/[1]+exp(-x/[2])/[2])
+			//"[0]*0.5*(exp(-x/[1])/[1]+exp(-x/[2])/[2])
 			int first_index=next_par_index;
-			std::string this_func =  "["+toString(next_par_index++)+"]*"
-									+"(exp(-x/["+toString(next_par_index)+"])/" // don't increment index; no ++
-									+"["+toString(next_par_index++)+"]+"
-									+"exp(-x/["+toString(next_par_index)+"])/"  // don't increment index; no ++
-									+"["+toString(next_par_index++)+"])";
+			std::string this_func =  "abs(["+toString(next_par_index)+"])*0.5*"
+									+"(exp(-x/["+toString(next_par_index+1)+"])/" // don't increment index
+									+"["+toString(next_par_index+1)+"]+"
+									+"exp(-x/["+toString(next_par_index+2)+"])/"  // don't increment index
+									+"["+toString(next_par_index+2)+"])";
+			next_par_index += 3;
 			// add this function to the total function string
 			total_func = (total_func=="") ? this_func : total_func+" + "+this_func;
 			// add the parameter names to our map
@@ -799,42 +1282,129 @@ TF1 PurewaterLi9Plots::BuildFunction(std::vector<std::string> isotopes, double f
 		}
 	}
 	// add the constant term
-	total_func += " + ["+toString(next_par_index)+"]";
+	total_func += " + abs(["+toString(next_par_index)+"])";
 	parameter_posns.emplace("const",next_par_index);
 	
 	// build the total function from the sum of all strings
+	func_name.pop_back(); // remove trailing '_'
 	TF1 afunc(func_name.c_str(),total_func.c_str(),func_min,func_max);
 	
 	// OK, propagate parameter names to the function
 	for(auto&& next_par : parameter_posns){
-		afunc.SetParName(next_par.second,next_par.first);
+		std::cout<<"settin parname "<<next_par.second<<" to "<<next_par.first<<std::endl;
+		afunc.SetParName(next_par.second,next_par.first.c_str());
+		if(next_par.first.substr(0,9)=="lifetime_"){
+			std::string anisotope = next_par.first.substr(9,std::string::npos);
+			std::cout<<"fixing lifetime of "<<anisotope<<std::endl;
+			FixLifetime(afunc,anisotope);
+		} else {
+			// for amplitudes / background constant we'll set the lower limit to be 0.
+			// This seems to be necessary for some fits otherwise
+			// ROOT gives negative amounts of some isotopes.
+			//afunc.SetParLimits(next_par.second, 0, 1E9); // FIXME what to use as upper limit????
+			// strictly i think we ought to give initial fit values,
+			// but thankfully MINUIT manages without them, but it doesn't like having
+			// (default) initial values at the limit, so set some small amount
+			//afunc.SetParameter(next_par.second,10);
+		}
 	}
 	
 	// return the built function
 	return afunc;
 }
 
-// set parameter names in a function
-// this is important because when building a sum of functions the parameters get shuffled,
-// so we can no longer use parameter numbers to set or get parameters
-void PurewaterLi9Plots::SetParameterNames(std::string isotope){
-	std::cout<<"setting parameter names for func "<<fitfuncs.at(isotope)->GetName()<<", isotope "<<isotope<<std::endl;
-	fitfuncs.at(isotope)->SetParNames(("amp_"+isotope).c_str(),
-									 ("lifetime_"+isotope).c_str(),
-									 ("const_"+isotope).c_str());
-	std::cout<<"func names are now: "<<std::endl;
-	for(int i=0; i<fitfuncs.at(isotope)->GetNpar(); ++i){
-		std::cout<<i<<"="<<fitfuncs.at(isotope)->GetParName(i)<<std::endl;
+// this is the hack
+TF1 PurewaterLi9Plots::BuildFunction2(std::vector<std::string> isotopes, double func_min, double func_max){
+	std::string total_func="";
+	std::string func_name="";
+	std::map<std::string,int> parameter_posns;
+	int next_par_index=0;
+	for(std::string& anisotope : isotopes){
+		func_name += anisotope+"_";
+		std::cout<<"adding isotope "<<anisotope<<std::endl;
+		// first, this 'isotope' may be a degenerate pair, so try to split it apart
+		if(anisotope.find("_")==std::string::npos){
+			// not a pair
+			std::cout<<"not a pair"<<std::endl;
+			int first_index=next_par_index;
+			
+			double paperval = papervals.at(anisotope) * (lifetimes.at(anisotope)/0.006);
+			// scale to match our max
+			paperval *= reco_effs_scaling.at(anisotope); // isotope-dependent scaling from change in E thresh
+			paperval *= paper_scaling;                   // a fixed scaling... just in case we want to do this
+			std::string paperstring = std::to_string(paperval/2.); // fix half the paper val, fit the rest
+			// "((x.xx + abs([0]))/[1])*exp(-x/[1])"
+			std::string this_func =  "(("+paperstring+"+abs(["+toString(next_par_index)
+									+"]))/["+toString(next_par_index+1)
+									+"])*exp(-x/["+toString(next_par_index+1)+"])";
+			next_par_index +=2;
+			// add this function to the total function string
+			total_func = (total_func=="") ? this_func : total_func+" + "+this_func;
+			// add the parameter names to our map
+			parameter_posns.emplace("amp_"+anisotope,first_index);
+			parameter_posns.emplace("lifetime_"+anisotope,first_index+1);
+		} else {
+			// it's a pair. For now, only support two isotopes at a time.
+			std::cout<<"a pair, splitting into ";
+			std::string first_isotope = anisotope.substr(0,anisotope.find_first_of("_"));
+			std::string second_isotope = anisotope.substr(anisotope.find_first_of("_")+1,std::string::npos);
+			std::cout<<first_isotope<<" and "<<second_isotope<<std::endl;
+			// the fit function isn't just the sum of two single isotope functions
+			// as they share an amplitude and constant
+			//"(x.xx + abs([0]))*0.5*(exp(-x/[1])/[1]+exp(-x/[2])/[2])
+			int first_index=next_par_index;
+			double paperval = papervals.at(first_isotope) * (lifetimes.at(first_isotope)/0.006);
+			// scale to match our max
+			// isotope-dependent scaling from change in E thresh
+			paperval *= 0.5*(reco_effs_scaling.at(first_isotope)+reco_effs_scaling.at(second_isotope));
+			// // a fixed scaling... just in case we want to do this
+			paperval *= paper_scaling;
+			// fix the abundance to at least half the paper val, fit the rest
+			std::string paperstring = std::to_string(paperval/2.);
+			std::string this_func =  "("+paperstring+"+abs(["+toString(next_par_index)+"]))*0.5*"
+									+"(exp(-x/["+toString(next_par_index+1)+"])/" // don't increment index
+									+"["+toString(next_par_index+1)+"]+"
+									+"exp(-x/["+toString(next_par_index+2)+"])/"  // don't increment index
+									+"["+toString(next_par_index+2)+"])";
+			next_par_index += 3;
+			// add this function to the total function string
+			total_func = (total_func=="") ? this_func : total_func+" + "+this_func;
+			// add the parameter names to our map
+			parameter_posns.emplace("amp_"+anisotope,first_index++);
+			parameter_posns.emplace("lifetime_"+first_isotope,first_index++);
+			parameter_posns.emplace("lifetime_"+second_isotope,first_index);
+		}
 	}
-}
-
-// sometimes we fit with a degenerate combination of two isotopes
-void PurewaterLi9Plots::SetParameterNames(std::string isotope_1, std::string isotope_2){
-	std::string combo = isotope_1+"_"+isotope_2;
-	fitfuncs.at(combo)->SetParNames(("amp_"+combo).c_str(),
-								   ("lifetime_"+isotope_2).c_str(),
-								   ("lifetime_"+isotope_2).c_str(),
-								   ("const_"+combo).c_str());
+	// add the constant term
+	total_func += " + abs(["+toString(next_par_index)+"])";
+	parameter_posns.emplace("const",next_par_index);
+	
+	// build the total function from the sum of all strings
+	func_name.pop_back(); // remove trailing '_'
+	TF1 afunc(func_name.c_str(),total_func.c_str(),func_min,func_max);
+	
+	// OK, propagate parameter names to the function
+	for(auto&& next_par : parameter_posns){
+		std::cout<<"settin parname "<<next_par.second<<" to "<<next_par.first<<std::endl;
+		afunc.SetParName(next_par.second,next_par.first.c_str());
+		if(next_par.first.substr(0,9)=="lifetime_"){
+			std::string anisotope = next_par.first.substr(9,std::string::npos);
+			std::cout<<"fixing lifetime of "<<anisotope<<std::endl;
+			FixLifetime(afunc,anisotope);
+		} else {
+			// for amplitudes / background constant we'll set the lower limit to be 0.
+			// This seems to be necessary for some fits otherwise
+			// ROOT gives negative amounts of some isotopes.
+			//afunc.SetParLimits(next_par.second, 0, 1E9); // FIXME what to use as upper limit????
+			// strictly i think we ought to give initial fit values,
+			// but thankfully MINUIT manages without them, but it doesn't like having
+			// (default) initial values at the limit, so set some small amount
+			//afunc.SetParameter(next_par.second,10);
+		}
+	}
+	
+	// return the built function
+	return afunc;
 }
 
 // fix lifetime of TF1 based on isotope name
@@ -845,180 +1415,232 @@ void PurewaterLi9Plots::FixLifetime(TF1& func, std::string isotope){
 
 // copy fit result amplitude value back into a component TF1
 void PurewaterLi9Plots::PushFitAmp(TF1& func, std::string isotope){
-	std::cout<<"fixing fit result for func "<<func.GetName()<<", isotope "<<isotope<<std::endl;
-	std::cout<<"available pars are: "<<std::endl;
-	for(int i=0; i<func.GetNpar(); ++i){
-		std::cout<<i<<"="<<func.GetParName(i)<<std::endl;
-	}
-	int par_number = func.GetParNumber(("amp_"+isotope).c_str());
-	fitfuncs.at(isotope)->FixParameter(par_number,func.GetParameter(("amp_"+isotope).c_str()));
+//	std::cout<<"fixing fit result for func "<<func.GetName()<<", isotope "<<isotope<<std::endl;
+//	std::cout<<"available pars are: "<<std::endl;
+//	for(int i=0; i<func.GetNpar(); ++i){
+//		std::cout<<i<<"="<<func.GetParName(i)<<std::endl;
+//	}
+//	int par_number = func.GetParNumber(("amp_"+isotope).c_str()); // can do straight by name
+	double v = static_cast<double>(func.GetParameter(("amp_"+isotope).c_str()));
+	std::cout<<"amp of "<<isotope<<" was "<<v<<std::endl;
+	fit_amps[isotope] = func.GetParameter(("amp_"+isotope).c_str());
+}
+
+// copy fit result amplitude value back into a component TF1
+void PurewaterLi9Plots::PushFitAmp(double amp, std::string isotope){
+	fit_amps[isotope] = amp;
 }
 
 // copy amplitude value from a component TF1 into a sum function for fitting
-void PurewaterLi9Plots::PullFitAmp(TF1& func, std::string isotope){
-	int par_number = func.GetParNumber(("amp_"+isotope).c_str());
-	func.FixParameter(par_number,fitfuncs.at(isotope)->GetParameter(("amp_"+isotope).c_str()));
+void PurewaterLi9Plots::PullFitAmp(TF1& func, std::string isotope, bool fix){
+	std::string parname = (isotope.substr(0,5)=="const") ? "const" : "amp_"+isotope;
+	int par_number = func.GetParNumber(parname.c_str());
+	if(fix){
+		func.FixParameter(par_number,fit_amps.at(isotope));
+	} else {
+		func.SetParameter(par_number,fit_amps.at(isotope));
+	}
 }
 
-TF1 PurewaterLi9Plots::GetSumFunc(TF1& func, Rest... rest){
-	return GetSumFunc(func, rest);
-}
-
-TF1 PurewaterLi9Plots::GetSumFunc(TF1& funca, TF1& funcb){
-	return TF1("sum_func",
-}
-
-bool PurewaterLi9Plots::PlotLi9NtagDt(){
-	// events passing dlt cut, li9 energy and lifetime cuts, and with a tagged neutron passing BDT cut:
-	TH1F li9_ntag_dt_hist("li9_ntag_dt_hist","Neutron Capture Candidate dt",20,0,550);
-	for(auto&& aval : li9_ntag_dt_vals) li9_ntag_dt_hist.Fill(aval); // FIXME weight by num_post_muons and num neutrons
-	li9_ntag_dt_hist.Write();
-	
-	return true;
+void PurewaterLi9Plots::PullPaperAmp(TF1& func, std::string isotope, bool threshold_scaling, double fixed_scaling){
+	double paperval = papervals.at(isotope);
+	double scaling = 1.;
+	if(isotope!="const"){
+		if(isotope.find("_")==std::string::npos){
+			paperval *= (lifetimes.at(isotope) ); ///0.006);
+			// not a pairing - can look up efficiency directly
+			if(threshold_scaling) scaling = reco_effs_scaling.at(isotope);
+			scaling *= fixed_scaling;
+		} else {
+			std::string first_isotope = isotope.substr(0,isotope.find_first_of("_"));
+			std::string second_isotope = isotope.substr(isotope.find_first_of("_")+1,std::string::npos);
+			paperval *= (((lifetimes.at(first_isotope)+lifetimes.at(second_isotope))*0.5)); ///0.006);
+			// how do we handle efficiency for pairs?
+			// best we can do is assume half for each and average the efficiency i think....
+			if(threshold_scaling){
+				scaling = 0.5*(reco_effs_scaling.at(first_isotope)
+										 + reco_effs_scaling.at(second_isotope));
+			}
+			scaling *= fixed_scaling;
+		}
+	}
+	// scale to match our max
+	//std::cout<<"fixed scaling is "<<fixed_scaling<<std::endl;
+	//std::cout<<"efficiency for "<<isotope<<" is "<<(scaling/fixed_scaling)<<std::endl;
+	paperval *= scaling;
+	std::string parname = (isotope=="const") ? "const" : "amp_"+isotope;
+	func.SetParameter(parname.c_str(), paperval);
 }
 
 bool PurewaterLi9Plots::PlotLi9BetaEnergy(){
-	// events passing dlt cut, li9 energy and lifetime cuts, and with a tagged neutron passing BDT cut:
+	// events passing dlt cut, li9 energy and lifetime cuts, and with a tagged neutron passing BDT cut
 	TH1F li9_e_hist("li9_e_hist","Li9 Candidate Beta Energy",7,6,li9_endpoint);
-	for(auto&& aval : li9_e_vals) li9_e_hist.Fill(aval); // FIXME weight by # post mus & num neutrons
+	// as we do this we need to add rest mass as reconstructed energy is only kinetic...
+	double e_rest_mass = 0.511; // [MeV] TODO replace this with TParticleDatabase lookup
+	for(auto&& aval : li9_e_vals) li9_e_hist.Fill(aval+e_rest_mass); // FIXME weight by # post mus & num neutrons
 	li9_e_hist.Write();
+	
+	// again to overlay the expected li9 and background plots, we need to take the beta spectra
+	// of each isotope and propagate it through the efficiency chain TODO
 	
 	return true;
 }
 
-bool PurewaterLi9Plots::PlotLi9TripletsDt(){
+// =========================================================================
+// Li9 ncapture fits
+// =========================================================================
+
+bool PurewaterLi9Plots::PlotNcaptureDt(){
+	// events passing dlt cut, li9 energy and lifetime cuts, and with a tagged neutron passing BDT cut
 	
 	// make a histogram to bin the data
-	std::cout<<"making li9 mu-lowe dt histogram"<<std::endl;
-	TH1F li9_muon_dt_hist("li9_muon_dt_hist","Muon to Low-E dt for Li9 triplets",
-	                       15,li9_lifetime_dtmin,li9_lifetime_dtmax);
-	for(auto&& aval : li9_muon_dt_vals){
-		li9_muon_dt_hist.Fill(aval);
+	std::cout<<"making li9 lowe-ncapture dt histogram"<<std::endl;
+	TH1F li9_ncap_dt_hist("li9_ncap_dt_hist","Beta to ncapture dt for Li9 triplets",
+	                       21,0,500E-6);
+	
+	// XXX debug investigation - no sign of expl decay of ncapture times... time span is correct,
+	// there's no data beyond 500us. What's going on?
+	std::cout<<"first 100 ncapture times were: {";
+	int ncpi=0;
+	for(auto&& aval : li9_ntag_dt_vals){
+		// XXX FIXME REMOVE AFTER REPROCESSING IN ANALYSE XXX XXX XXX XXX XXX XXX 
+		double ncap_time_adjusted = aval < 50000 ? aval : aval - 65000;
+		ncap_time_adjusted /= 1E9;
+		if(ncpi<100) std::cout<<ncap_time_adjusted<<", "; ++ncpi;
+		li9_ncap_dt_hist.Fill(ncap_time_adjusted);  // FIXME weight by num_post_muons and num neutrons
 	}
+	std::cout<<"}"<<std::endl;
 	std::cout<<"saving to file"<<std::endl;
-	li9_muon_dt_hist.Write();
+	// for comparison to the paper, scale the x axis up to us
+	li9_ncap_dt_hist.GetXaxis()->SetLimits(0,500);  // changes axis labels but doesn't affect binning
+	li9_ncap_dt_hist.Write();
+	// set it back for analysis
+	li9_ncap_dt_hist.GetXaxis()->SetLimits(0,500E-6);  // XXX this is bad practice
 	
-	// looks like they've drawn a TGraphErrors: convert our histogram
-	std::cout<<"converting to TGraphErrors"<<std::endl;
-	int n_bins = li9_muon_dt_hist.GetNbinsX();
-	std::vector<float> yvals(n_bins);
-	std::vector<float> xvals(n_bins);
-	std::vector<float> yerrs(n_bins);
-	std::vector<float> xerrs(n_bins);
-	for(int bini=0; bini<n_bins; ++bini){
-		xvals.at(bini)=li9_muon_dt_hist.GetBinCenter(bini);
-		yvals.at(bini)=li9_muon_dt_hist.GetBinContent(bini);
-		xerrs.at(bini)=li9_muon_dt_hist.GetBinWidth(1)/2.;
-		yerrs.at(bini)= (yvals.at(bini)==0) ? 0 : 1./sqrt(yvals.at(bini)); // FIXME how to handle errors on bin counts 0? 
-	}
-	TGraphErrors li9_dt_tgraph(n_bins,xvals.data(),yvals.data(),xerrs.data(),yerrs.data());
-	li9_dt_tgraph.SetTitle(li9_muon_dt_hist.GetTitle());
-	li9_dt_tgraph.SetName("li9_muon_dt_tgraph");
-	li9_dt_tgraph.Write();
+	// TODO get expected number of background events
+	// this is also needed for the expected background E spectrum, where we also need
+	// the energies of the background, so calculate that first and we can just take the number
 	
+	// fit the ncapture lifetime, Fig 5 from the paper.
 	// do we do chi2 fit or binned likelihood fit? why? FIXME how do we do binned likelihood?
 	
 	// perform an unbinned chi2 fit
 	std::cout<<"doing binned chi2 fit"<<std::endl;
-	BinnedLi9DtChi2Fit(&li9_muon_dt_hist);
-	
-	// perform an unbinned likelihood fit
-	// TODO
+	double binned_estimate = BinnedNcapDtChi2Fit(&li9_ncap_dt_hist);
 	
 	// perform an unbinned likelihood fit
 	std::cout<<"doing unbinned likelihood fit"<<std::endl;
-	UnbinnedLi9DtLogLikeFit();
-	
-	// TODO unbinned extended likelihood fit to also extract number of Li9 events?
+	UnbinnedNcapDtLogLikeFit(&li9_ncap_dt_hist, binned_estimate);
 	
 	return true;
 }
 
-bool PurewaterLi9Plots::BinnedLi9DtChi2Fit(TH1F* li9_muon_dt_hist){
-	std::cout<<"making TF1 for binned chi2 fit with "<<li9_muon_dt_hist->GetEntries()<<" values"<<std::endl;
+double PurewaterLi9Plots::BinnedNcapDtChi2Fit(TH1F* li9_ncap_dt_hist){
+	// this fits the lifetime of ncapture to extract the amount of exponential and constant
+	std::cout<<"making TF1 for binned chi2 fit with "<<li9_ncap_dt_hist->GetEntries()<<" values"<<std::endl;
 	
-	// simple chi2 fit of 'y = C + A*exp(-dt/τ)' for all values of C, A, τ
-	TF1 li9_muon_dt_func("li9_muon_dt_func","[0]+[1]*exp(-x/[2])",
-	                      li9_lifetime_dtmin,li9_lifetime_dtmax);
+	// number of neutrons left after time t = N = N0*exp(-t/τ)
+	// rate of change of num neutrons, i.e. rate of observed ncapture events = dN/dt = -N0*τ*exp(-t/τ)
+	// we can ignore the sign which just says N is decreasing.
+	// simple chi2 fit of 'y = C + A*τ*exp(-dt/τ)' for all values of C, A, τ
+	TF1 ncap_dt_func("ncap_dt_func","[0]+[1]*[2]*exp(-x/[2])",ncap_dtmin,ncap_dtmax);
 	
 	// set parameter names
-	li9_muon_dt_func.SetParName(0,"num bg events");
-	li9_muon_dt_func.SetParName(1,"num Li9 events");
-	li9_muon_dt_func.SetParName(2,"Li9 lifetime");
+	ncap_dt_func.SetParName(0,"rate of bg events");
+	ncap_dt_func.SetParName(1,"num of Li9+n events");
+	ncap_dt_func.SetParName(2,"ncapture lifetime");
 	
-	// set starting values
-	//li9_muon_dt_func.SetParameters(allparams.data());  // pass an array or set individually
-	li9_muon_dt_func.SetParameter(0,0);     // TODO estimate from accidental rate of ntag from MC and num events?
-	li9_muon_dt_func.SetParameter(1,li9_muon_dt_hist->GetEntries());
-	li9_muon_dt_func.SetParameter(2,0.26);  // li9 lifetime 0.26 seconds from paper
-	
-	// set parameter limits. For minuit at least this is strongly discouraged
-	// Maybe ok for chi2 fits but not likelihood fits?
-	//li9_muon_dt_func.SetParLimits(4, 0., 200.);
+	// set starting values - we can fix the ncapture lifetime
+	//ncap_dt_func.SetParameters(allparams.data());  // pass an array or set individually
+	ncap_dt_func.SetParameter(0,0);  // TODO estimate from accidental rate of ntag from MC and num events?
+	ncap_dt_func.SetParameter(1,li9_ncap_dt_hist->GetBinContent(1));
+	ncap_dt_func.FixParameter(2,lifetimes.at("ncapture"));
 	
 	// set num TF1 points for drawing
-	li9_muon_dt_func.SetNpx(1000);
+	ncap_dt_func.SetNpx(1000);
 	
 	// DO THE FIT
-	std::cout<<"doing binned chi2 fit"<<std::endl;
-	TFitResultPtr fitresult = li9_muon_dt_hist->Fit("li9_muon_dt_func","MRS");
+	std::cout<<"invoking li9 ncapture binned chi2 fit"<<std::endl;
+	TFitResultPtr fitresult = li9_ncap_dt_hist->Fit("ncap_dt_func","MRS");
 	// options here are  M: better fit, R: use range, S: get resultsptr
 	
 	// print result
-	std::cout<<"li9 dt binned chi2 fit parameters = {";
-	for(int i=0; i<(li9_muon_dt_func.GetNpar()); i++){
-		std::cout<<li9_muon_dt_func.GetParameter(i);
-		(i<(li9_muon_dt_func.GetNpar()-1)) ? std::cout<<", " : std::cout<<"};\n";
+	std::cout<<"ncapture dt binned chi2 fit parameters = {";
+	for(int i=0; i<(ncap_dt_func.GetNpar()); i++){
+		std::cout<<ncap_dt_func.GetParameter(i);
+		(i<(ncap_dt_func.GetNpar()-1)) ? std::cout<<", " : std::cout<<"};\n";
 	}
-	//float fitchi2 = fitresult->Chi2();                               // same as below, which
-	float fitchi2 = li9_muon_dt_func.GetChisquare();         // doesn't need fitresultptr
-	Log(toolName+" li9 mu->lowe dt fit chi2 was "+toString(fitchi2),v_message,verbosity);
+	//float fitchi2 = fitresult->Chi2();                 // same as below, which
+	float fitchi2 = ncap_dt_func.GetChisquare();         // doesn't need fitresultptr
+	Log(toolName+" li9 lowe->ncap dt fit chi2 was "+toString(fitchi2),v_message,verbosity);
 	
 	// draw result
-//	li9_muon_dt_hist->Draw();
+	li9_ncap_dt_hist->Draw();
+	gPad->WaitPrimitive();
+	gPad->Clear();
 //	//fit->Draw("lsame");   // not necessary, fit is added to histogram's list of functions and drawn automatically
+	li9_ncap_dt_hist->GetListOfFunctions()->Clear();
 	
-	std::cout<<"binned chi2 fit done"<<std::endl;
-	return true;
+	std::cout<<"binned ncapture chi2 fit done"<<std::endl;
+	return ncap_dt_func.GetParameter(1);
 }
 
-bool PurewaterLi9Plots::UnbinnedLi9DtLogLikeFit(){
+bool PurewaterLi9Plots::UnbinnedNcapDtLogLikeFit(TH1F* li9_ncap_dt_hist, double num_li9_events){
 	
-	std::cout<<"doing unbinned likelihood fit with "<<li9_muon_dt_vals.size()<<" values"<<std::endl;
+	std::cout<<"doing unbinned likelihood fit with "<<li9_ntag_dt_vals.size()<<" values"<<std::endl;
 	
 	// TF1 of likelihood distribution
 	// ROOT provides some basic pdfs: https://root.cern.ch/doc/v610/group__PdfFunc.html
 	// but we need our likelihood to be normalized and I don't see how to do it suitably with these
-//	TF1 li9_muon_dt_unbinned_like("li9_muon_dt_unbinned_like",
+//	TF1 ncapture_dt_unbinned_like("ncapture_dt_unbinned_like",
 //	TString::Format("[0]*ROOT::Math::uniform_pdf (x,%.2f,%.2f,0) "
 //	                " + [1]*ROOT::Math::exponential_pdf(x,[1],0)",xmin,xmax),xmin,xmax);
 	
-	int fit_n_pars = 2;
+	// so let's make our own
+	int fit_n_pars = 1;
 	int func_n_dims = 1;
 	std::cout<<"making TF1"<<std::endl;
-	TF1 li9_muon_dt_unbinned_like("li9_muon_dt_unbinned_like",this,&PurewaterLi9Plots::li9_lifetime_loglike,
-	                       li9_lifetime_dtmin, li9_lifetime_dtmax, fit_n_pars,
-	                       "PurewaterLi9Plots","li9_lifetime_loglike");
+	TF1 ncapture_dt_unbinned_like("ncapture_dt_unbinned_like",this,&PurewaterLi9Plots::ncap_lifetime_loglike,
+	        ncap_dtmin, ncap_dtmax, fit_n_pars, "PurewaterLi9Plots", "ncap_lifetime_loglike");
 	
 	// set parameter names
-	li9_muon_dt_unbinned_like.SetParName(0,"fraction of Li9 events");
-	li9_muon_dt_unbinned_like.SetParName(1,"Li9 lifetime");
+	ncapture_dt_unbinned_like.SetParName(0,"fraction of background events");
+	ncapture_dt_unbinned_like.SetParLimits(0,0,1.);
 	
-	// set starting values
-	//li9_muon_dt_unbinned_like.SetParameters(allparams.data());  // pass an array or set individually
-	li9_muon_dt_unbinned_like.SetParameter(0,0.8);   // TODO better way to estimate initial val?
-	li9_muon_dt_unbinned_like.SetParameter(1,0.26);  // li9 lifetime 0.26 seconds from paper
+	//ncapture_dt_unbinned_like.SetParameters(allparams.data());  // pass an array or set individually
+	// set starting values to fit val from binned fit
+	std::cout<<"setting starting value of background fraction to "
+			 <<(1.-(num_li9_events/li9_ntag_dt_vals.size()))<<std::endl;
+	ncapture_dt_unbinned_like.SetParameter(0,(1.-(num_li9_events/li9_ntag_dt_vals.size())));
+	
+	int nbins=10;
+	for(int i=nbins; i>0; --i){
+		std::vector<double> pars{ncapture_dt_unbinned_like.GetParameter(0)};
+		double xval = ncap_dtmin+double(i)*((ncap_dtmax-ncap_dtmin)/double(nbins-1));
+		std::cout<<"ncapture unbinned function eval at "<<xval<<" = "
+				 <<ncapture_dt_unbinned_like.Eval(xval)<<std::endl
+				 <<", base function = "<<ncap_lifetime_loglike(&xval,pars.data())
+				 <<std::endl;
+	}
+	
+	// draw for comparison. Since our likelihood function is normalised we need to normalise the data too
+	TH1F* li9_ncap_dt_hist_normalised = (TH1F*)li9_ncap_dt_hist->Clone();
+	li9_ncap_dt_hist_normalised->Scale(1./li9_ncap_dt_hist->Integral());
+	li9_ncap_dt_hist_normalised->Draw();
+	ncapture_dt_unbinned_like.Draw("same");
+	gPad->WaitPrimitive();
+	return true;
 	
 	// convert the TF1 for use in unbinned fit
 	std::cout<<"making TF1 wrapper"<<std::endl;
-	ROOT::Math::WrappedMultiTF1 li9_mu_dt_unbinned_func(li9_muon_dt_unbinned_like,
-	                                                    li9_muon_dt_unbinned_like.GetNdim());
+	ROOT::Math::WrappedMultiTF1 ncapture_dt_unbinned_func(ncapture_dt_unbinned_like,
+	                                                      ncapture_dt_unbinned_like.GetNdim());
 	
 	// build a fitter
 	// 'false' says let the fitter calculate derivatives of the function itself (recommended)
 	std::cout<<"making fitter"<<std::endl;
 	ROOT::Fit::Fitter fitter;
-	fitter.SetFunction(li9_mu_dt_unbinned_func);  // no bool in ROOT 5 - what's the default?
+	fitter.SetFunction(ncapture_dt_unbinned_func);  // no bool in ROOT 5 - what's the default?
 	// important note: the fit function should be normalized, but simply calculating and dividing by
 	// the integral before returning may not be enough as this introduces a correlation
 	// between the fit parameters. Apparently the best way is to fit N-1 parameters, then derive
@@ -1071,18 +1693,18 @@ bool PurewaterLi9Plots::UnbinnedLi9DtLogLikeFit(){
 	
 //	ROOT::Fit::DataOptions opt;
 //	ROOT::Fit::DataRange range(0,5);
-//	ROOT::Fit::UnBinData li9_dt_data(opt, range, x.size());
+//	ROOT::Fit::UnBinData ncap_dt_data(opt, range, x.size());
 	
 	// convert the data into a suitable 'UnBinData' object
 	std::cout<<"making unbinned dataset"<<std::endl;
-	ROOT::Fit::UnBinData li9_dt_data(li9_muon_dt_vals.size());
-	for(auto aval : li9_muon_dt_vals){   // note: use auto NOT auto&&
-		li9_dt_data.Add(aval);   // can we introduce weights here? FIXME
+	ROOT::Fit::UnBinData ncap_dt_data(li9_ntag_dt_vals.size());
+	for(auto aval : li9_ntag_dt_vals){   // note: use auto NOT auto&&
+		ncap_dt_data.Add(aval);   // can we introduce weights here? FIXME
 	}
 	
 	// DO THE FIT
 	std::cout<<"doing the fit"<<std::endl;
-	fitter.LikelihoodFit(li9_dt_data);
+	fitter.LikelihoodFit(ncap_dt_data);
 	
 	// print the results
 	ROOT::Fit::FitResult r=fitter.Result();
@@ -1091,33 +1713,250 @@ bool PurewaterLi9Plots::UnbinnedLi9DtLogLikeFit(){
 	std::cout<<"unbinned likelihood fit done"<<std::endl;
 	
 	// TODO err, extract and return parameters for drawing
+	li9_ncap_dt_hist_normalised->Draw();
+	ncapture_dt_unbinned_like.Draw("same");
+	gPad->WaitPrimitive();
+	gPad->Clear();
 	return true;
 }
 
-double PurewaterLi9Plots::li9_lifetime_loglike(double* x, double* par){
+double PurewaterLi9Plots::ncap_lifetime_loglike(double* x, double* par){
+	// shouldn't be trying to fit times outside our range
+	if(((*x)<ncap_dtmin) || ((*x)>ncap_dtmax)) return 1e10;
+	// shouldn't be trying to fit parameter values outside the valid range
+	if((par[0]<0.) || (par[0]>1.)) return 1e10;
 	
-	if(*x<0) return 1e10;  // shouldn't be trying to fit negative times
+	// likelihood of an event occurring at a given time, using the specified background fraction
+	// being that this is a probability the return value should be normalised 0-1
+	// since the integral is fixed, all we can vary here is is the fraction
+	// of events that are signal vs background
 	
-	// like = C + A*exp(-dt/τ)
-	//         C = # of accidental backgrounds (constant per unit time)
-	//par[0] = A = # li9 decay events
-	//par[1] = τ = li9 decay lifetime
+	// rate = C + A*exp(-dt/τ)
+	// τ = neutron capture lifetime
+	// C = rate of accidental backgrounds
+	// A = rate of signal events
 	
-	// calculate area of expl decay curve over the fitted range for normalization
-	double expintegral = par[0]*par[1]*(exp(-li9_lifetime_dtmin/par[1]) - exp(-li9_lifetime_dtmax/par[1]));
-	// to normalize this pdf the (constant part * x range) must make up the rest
-	double bgfrac = (1. - expintegral)/(li9_lifetime_dtmax-li9_lifetime_dtmin);
+	// we need to make a PDF, so need to normalise. Calculating the integral we get:
+	// integral = C*Δt + A*τ*[exp(-tmax/τ) - exp(-tmin/τ)]
+	// the normalized function is obtained by scaling by this integral, turning C->c, A->a
+	// a = A / integral, c = C / integral, giving:
+	// c*Δt + a*τ*[exp(-tmax/τ) - exp(-tmin/τ)] = 1
+	// we can relate a and c:
+	// a = (c*Δt - 1 ) / τ*[exp(-tmax/τ) - exp(-tmin/τ)]
+	// so now c*Δt is the fraction of background events
+	// for a to remain poaitive we should restrict c to the range 0 to (1/Δt)
+	// if we define par[0] = c' = c*Δt, then we can fit it directly.
 	
-	// bgfrac must be >0, so if bgfrac<0 return something that rapidly goes to very large values
-	if(bgfrac<0) return exp(bgfrac*100.);
+	// Now, we have been given a value par[0], so
+	// calculate a based on our value of c':
+	double timespan = ncap_dtmax-ncap_dtmin;
+	double ncap_lifetime = lifetimes.at("9Li");
+	double a =  (par[0] - 1.) / (ncap_lifetime*(exp(-ncap_dtmax/ncap_lifetime) - exp(-ncap_dtmin/ncap_lifetime)));
 	
-	// otherwise calculate and return log-likelihood of value x given this set of parameters
-	// log(like/integral[like]) = log(like) - log(integral[like])
-	return log(bgfrac + par[0]*exp(-(*x)/par[1]));
+	// calculate likelihood of an event at time (*x) given a background fraction of c'
+	// i.e. evaluate the normalised function, c + a*exp(-dt/τ), at this time
+	double thelikelihood = (par[0]/timespan) + a*exp(-(*x)/ncap_lifetime);
+	
+	// return log-likelihood
+	return thelikelihood;
+	//return log(thelikelihood);    // doesn't this mess with our normalization?
 }
 
 
+// =========================================================================
+// Li9 lifetime fits
+// =========================================================================
 
+bool PurewaterLi9Plots::PlotLi9LifetimeDt(){
+	
+	// make a histogram to bin the data
+	std::cout<<"making li9 mu-lowe dt histogram"<<std::endl;
+	TH1F li9_muon_dt_hist("li9_muon_dt_hist","Muon to Low-E dt for Li9 triplets",
+	                       15,li9_lifetime_dtmin,li9_lifetime_dtmax);
+	for(auto&& aval : li9_muon_dt_vals){
+		li9_muon_dt_hist.Fill(aval);
+	}
+	std::cout<<"saving to file"<<std::endl;
+	li9_muon_dt_hist.Write();
+	
+	/*
+	// TODO calculate the efficiency of background selection and scale down the number
+	// of spallation events to get the expected number of accidental triplets
+	// efficiency is based on background acceptance of BDT and of preceding cuts i guess
+	// this is subtracted off to estimate the number of li9 events
+	
+	// get ntag signal and background efficiency
+	// ------------------------------------------
+	// read the BDT ROC and populate the splines
+	fill_roc_ntag();
+	// evaluate the splines at the working point used to retrieve the efficiencies
+	double ntag_sig_eff = sig->Eval(ncut_li9);
+	double ntag_bg_eff = bg->Eval(ncut_li9);
+	
+	// total background selection efficiency is product of all cuts specific to Li9
+	// * dt in li9 lifetime range 0.05-0.5
+	// * lowe energy in li9 beta energy range
+	// * no other muons within 1ms
+	// * ntag bdt fom > 0.995
+	// how do we determine the fraction of non-li9 events that pass these? MC? paper doesn't say...
+	double li9_lifetime_bg_eff = 1;
+	double li9_energy_bg_eff = 1;
+	double no_mu_1ms_bg_eff = 1;
+	double li9_bg_eff = li9_lifetime_bg_eff * li9_energy_bg_eff * ntag_bg_eff * no_mu_1ms_bg_eff;
+	// we multiply this by the number of spallation events to get the total bg contamination
+	double num_spall_events = dt_mu_lowe_vals.size();
+	double total_li9_bg = num_spall_events * li9_bg_eff;
+	// and then we get the number of li9 events as the remainder
+	// fig 4 plots the spectrum of li9 energy, and of accidentals - presumably from MC of all bgs?
+	// and the expected li9 spectrum - presumably from some suitable reference
+	*/
+	
+	// fit the Li9 lifetime, Fig 6 from the paper. NOT neutron capture times (plot 5!)
+	// this fits a combination of 8 exponentials (including li9) with fixed abundances,
+	// and uses it to extract the lifetime of li9. The paper only does a binned fit.
+	// do we do chi2 fit or binned likelihood fit? why? FIXME how do we do binned likelihood?
+	
+	// perform a binned chi2 fit
+	std::cout<<"doing Li9 lifetime binned chi2 fit"<<std::endl;
+	double binned_estimate = BinnedLi9DtChi2Fit(&li9_muon_dt_hist);
+	
+	// TODO (un)binned extended likelihood fit to also extract number of Li9 events?
+	
+	return true;
+}
+
+double PurewaterLi9Plots::BinnedLi9DtChi2Fit(TH1F* li9_muon_dt_hist){
+	// this fits the lifetime of li9 as a cross-check, by fitting 8 exponentials
+	// based on backgrounds from other isotopes. The amount of other isotopes is based
+	// on the previous global fit to muon-lowe dt, and the fraction of those that pass
+	// all cuts, from first red, third, lt, li9 dt, li9 energy and ntag
+	// To do this we need the efficiency of all of those cuts for all isotopes!
+	// finally we fit (unbinned? binned?) the distribution of mu-lowe times leaving only li9 lifetime floating
+	
+	// currently the above paragraph does not describe what this code does FIXME
+	std::cout<<"making TF1 for binned chi2 fit with "<<li9_muon_dt_hist->GetEntries()<<" values"<<std::endl;
+	
+	// number of li9 left after time t = N = N0*exp(-t/τ)
+	// rate of change of li9, i.e. rate of observed li9 events = dN/dt = -N0*τ*exp(-t/τ)
+	// we can ignore the sign which just says N is decreasing.
+	// simple chi2 fit of 'y = C + A*τ*exp(-dt/τ)' for all values of C, A, τ
+	TF1 li9_muon_dt_func("li9_muon_dt_func","[0]+[1]*[2]*exp(-x/[2])",
+	                      li9_lifetime_dtmin,li9_lifetime_dtmax);
+	
+	// set parameter names
+	li9_muon_dt_func.SetParName(0,"num bg events");
+	li9_muon_dt_func.SetParName(1,"num Li9 events");
+	li9_muon_dt_func.SetParName(2,"Li9 lifetime");
+	
+	// set starting values - we can fix the lifetime
+	//li9_muon_dt_func.SetParameters(allparams.data());  // pass an array or set individually
+	li9_muon_dt_func.SetParameter(0,0);  // TODO estimate from accidental rate of ntag from MC and num events?
+	li9_muon_dt_func.SetParameter(1,li9_muon_dt_hist->GetBinContent(1));
+	li9_muon_dt_func.FixParameter(2,lifetimes.at("9Li"));
+	
+	// set parameter limits. For minuit at least this is strongly discouraged
+	// Maybe ok for chi2 fits but not likelihood fits?
+	//li9_muon_dt_func.SetParLimits(4, 0., 200.);
+	
+	// set num TF1 points for drawing
+	li9_muon_dt_func.SetNpx(1000);
+	
+	// DO THE FIT
+	std::cout<<"invoking li9 lifetime chi2 fit"<<std::endl;
+	TFitResultPtr fitresult = li9_muon_dt_hist->Fit("li9_muon_dt_func","MRS");
+	// options here are  M: better fit, R: use range, S: get resultsptr
+	
+	// print result
+	std::cout<<"li9 lifetime binned chi2 fit parameters = {";
+	for(int i=0; i<(li9_muon_dt_func.GetNpar()); i++){
+		std::cout<<li9_muon_dt_func.GetParameter(i);
+		(i<(li9_muon_dt_func.GetNpar()-1)) ? std::cout<<", " : std::cout<<"};\n";
+	}
+	//float fitchi2 = fitresult->Chi2();                               // same as below, which
+	float fitchi2 = li9_muon_dt_func.GetChisquare();         // doesn't need fitresultptr
+	Log(toolName+" li9 mu->lowe dt fit chi2 was "+toString(fitchi2),v_message,verbosity);
+	
+	// draw result
+	/*
+	li9_muon_dt_hist->Draw();
+	gPad->WaitPrimitive();
+	gPad->Clear();
+//	//fit->Draw("lsame");   // not necessary, fit is added to histogram's list of functions and drawn automatically
+	*/
+	li9_muon_dt_hist->GetListOfFunctions()->Clear();
+	
+	std::cout<<"li9 lifetime binned chi2 fit done"<<std::endl;
+	return li9_muon_dt_func.GetParameter(1);
+}
+
+// =========================================================================
+// =========================================================================
+
+bool PurewaterLi9Plots::GetEnergyCutEfficiencies(){
+	// 2015 paper had a low threshold of 6MeV, newer data has (as of now) 8MeV
+	// so to compare yeilds we need to scale the paper values by the fraction
+	// of decays that would be above the respective thresholds
+	
+	std::map<std::string,int> true_events_below_8MeV;
+	std::map<std::string,int> true_events_above_8MeV;
+	std::map<std::string,int> true_events_below_6MeV;
+	std::map<std::string,int> true_events_above_6MeV;
+	
+	// same but using energy from bonsai
+	std::map<std::string,int> reco_events_below_8MeV;
+	std::map<std::string,int> reco_events_above_8MeV;
+	std::map<std::string,int> reco_events_below_6MeV;
+	std::map<std::string,int> reco_events_above_6MeV;
+	
+	BoostStore efficiencyStore(true,constants::BOOST_STORE_BINARY_FORMAT);
+	efficiencyStore.Initialise(efficienciesFile);
+	efficiencyStore.Get("true_events_below_8MeV",true_events_below_8MeV);
+	efficiencyStore.Get("true_events_above_8MeV",true_events_above_8MeV);
+	efficiencyStore.Get("true_events_below_6MeV",true_events_below_6MeV);
+	efficiencyStore.Get("true_events_above_6MeV",true_events_above_6MeV);
+	
+	efficiencyStore.Get("reco_events_below_8MeV",reco_events_below_8MeV);
+	efficiencyStore.Get("reco_events_above_8MeV",reco_events_above_8MeV);
+	efficiencyStore.Get("reco_events_below_6MeV",reco_events_below_6MeV);
+	efficiencyStore.Get("reco_events_above_6MeV",reco_events_above_6MeV);
+	
+	for(auto&& anisotope : true_events_below_6MeV){
+		std::string isotope = anisotope.first;
+		double true_below6 = true_events_below_6MeV.at(isotope);
+		double true_above6 = true_events_above_6MeV.at(isotope);
+		double true_eff6 = true_above6/(true_below6+true_above6);
+		double true_below8 = true_events_below_8MeV.at(isotope);
+		double true_above8 = true_events_above_8MeV.at(isotope);
+		double true_eff8 = true_above8/(true_below8+true_above8);
+		std::cout<<"TRUE ENERGY:"<<std::endl;
+		std::cout<<"Isotope "<<anisotope.first<<" had "<<true_below6<<" events below 6MeV vs "
+				 <<true_above6<<" above 6 MeV corresponding to an efficiency of "<<(true_eff6*100.)<<"%"
+				 <<std::endl<<"compared to "<<true_below8<<" events below 8MeV and "<<true_above8
+				 <<" events above 8 MeV corresponding to an efficiency of "<<(true_eff8*100.)<<"%"<<std::endl;
+		
+		true_effs_6mev.emplace(isotope,true_eff6);
+		true_effs_8mev.emplace(isotope,true_eff8);
+		true_effs_scaling.emplace(isotope,(true_eff8/true_eff6));
+		
+		// same with reconstructed energies - the spectra are VERY distorted...!?
+		double reco_below6 = reco_events_below_6MeV.at(isotope);
+		double reco_above6 = reco_events_above_6MeV.at(isotope);
+		double reco_eff6 = reco_above6/(reco_below6+reco_above6);
+		double reco_below8 = reco_events_below_8MeV.at(isotope);
+		double reco_above8 = reco_events_above_8MeV.at(isotope);
+		double reco_eff8 = reco_above8/(reco_below8+reco_above8);
+		std::cout<<"RECONSTRUCTED ENERGY:"<<std::endl;
+		std::cout<<"Isotope "<<anisotope.first<<" had "<<reco_below6<<" events below 6MeV vs "
+				 <<reco_above6<<" above 6 MeV corresponding to an efficiency of "<<(reco_eff6*100.)<<"%"
+				 <<std::endl<<"compared to "<<reco_below8<<" events below 8MeV and "<<reco_above8
+				 <<" events above 8 MeV corresponding to an efficiency of "<<(reco_eff8*100.)<<"%"<<std::endl;
+		
+		reco_effs_6mev.emplace(isotope,reco_eff6);
+		reco_effs_8mev.emplace(isotope,reco_eff8);
+		reco_effs_scaling.emplace(isotope,(reco_eff8/reco_eff6));
+	}
+	return true;
+}
 
 
 
@@ -1231,5 +2070,27 @@ bool PurewaterLi9Plots::PlotPaperDlt(THStack& ourplots){
 	ourplots.Add(h_paper_dl_stopping);
 	
 	return true;
+}
+
+void PurewaterLi9Plots::fill_roc_ntag(){
+	ifstream fin(bdt_outfile);
+	const int splmax = 5000;
+	double cut, sg, bkg, sgsys, bkgsys, dum1, dum2;
+	std::vector<double> v_cut, v_sg, v_bkg, v_sgsys, v_bkgsys;
+	int k = 0;
+	while(fin){
+		std::vector<double> res;
+		fin >> cut >> sg >> bkg >> sgsys >> bkgsys >> dum1 >> dum2;
+		if (cut > cut_lowth) break;
+		v_cut.push_back(cut);
+		v_sg.push_back(sg);
+		v_bkg.push_back(bkg);
+		v_sgsys.push_back(sgsys);
+		v_bkgsys.push_back(bkgsys);
+	}
+	sig = new TSpline3("signal", v_cut.data(), v_sg.data(),v_cut.size(), 0, 1, 0);
+	bg = new TSpline3("background", v_cut.data(), v_bkg.data(), v_cut.size(), 0, 1, 0);
+	sigsys = new TSpline3("signal systematic", v_cut.data(), v_sgsys.data(), v_cut.size(), 0, 0, 0);
+	bgsys = new TSpline3("background systematic", v_cut.data(), v_bkgsys.data(), v_cut.size(), 0, 0, 0);
 }
 

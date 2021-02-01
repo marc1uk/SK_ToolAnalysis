@@ -7,8 +7,8 @@ outputFile li9_results.root
 maxEntries -1                   # max num input entries to process
 writeFrequency 50               # update output file after this many entries
 
-#valuesFileMode write            # read/write values to plot/fit to a BoostStore file (empty to do neither)
-valuesFileMode read            # read/write values to plot/fit to a BoostStore file (empty to do neither)
+#valuesFileMode write           # read/write values to plot/fit to a BoostStore file (empty to do neither)
+valuesFileMode read             # read/write values to plot/fit to a BoostStore file (empty to do neither)
 valuesFile li9_values.bs        # BoostStore file to read or write
 
 # The cut file may record the events passing many different cuts.
@@ -18,6 +18,8 @@ valuesFile li9_values.bs        # BoostStore file to read or write
 # we need to see every event from (i.e. the loosest cut we want to make plots about)
 topCutName lowe_energy>6MeV
 
+efficienciesFile FlukaBetaEfficiencies_bsgoodcut.bs
+
 max_closest_muon_dt 0.001       # seconds. 'cut_1ms'   in sonia's code
 max_closest_lowe_dx 490         # cm       'cut_multi' in sonia's code
 
@@ -25,8 +27,12 @@ num_bdt_cut_bins 50             # BDT cut bins (decimal log scale)
 bdt_cut_min 0.2                 # range of BDT FOM thresholds to explore
 bdt_cut_max 0.999               # 
 ntag_FOM_threshold 0.995        # nominal BDT FOM threshold for Li9 tagging (ncut_li9 in sonia's code)
-li9_lifetime_dtmin 0.05         # [us]  range of mu_lowe dt values to use for Li9 sample
-li9_lifetime_dtmax 0.5          # [us]
+li9_lifetime_dtmin 0.05         # seconds. range of mu_lowe dt values to use for Li9 sample
+li9_lifetime_dtmax 0.5          # seconds.
+li9_ncapture_dtmin 0            # microseconds
+li9_ncapture_dtmin 500          # microseconds
+
+paper_scaling 1                 # (3.5E4/1E5), but this doesn't account for different energy threshold
 
 run_min 68671                   # SHE trigger threshold lowered to 8 MeV
 run_max 73031                   # Yang Zhang's time range
