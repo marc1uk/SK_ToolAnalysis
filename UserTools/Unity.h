@@ -9,3 +9,7 @@
 #include "GracefulStop.h"
 #include "PurewaterLi9Plots.h"
 #include "LoadBetaSpectraFluka.h"
+#include "PlotMuonDtDlt.h"
+#include "FitLi9Lifetime.h"
+#include "FitPurewaterLi9NcaptureDt.h"
+#include "FitSpallationDt.h"

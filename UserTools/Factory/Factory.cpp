@@ -16,6 +16,10 @@ if (tool=="PurewaterLi9Rate") ret=new PurewaterLi9Rate;
 if (tool=="GracefulStop") ret=new GracefulStop;
 if (tool=="PurewaterLi9Plots") ret=new PurewaterLi9Plots;
 if (tool=="LoadBetaSpectraFluka") ret=new LoadBetaSpectraFluka;
+if (tool=="PlotMuonDtDlt") ret=new PlotMuonDtDlt;
+if (tool=="FitLi9Lifetime") ret=new FitLi9Lifetime;
+if (tool=="FitPurewaterLi9NcaptureDt") ret=new FitPurewaterLi9NcaptureDt;
+if (tool=="FitSpallationDt") ret=new FitSpallationDt;
 return ret;
 }
 

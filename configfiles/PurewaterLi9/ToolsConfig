@@ -1,3 +1,10 @@
 #myPureWaterLi9Rate PurewaterLi9Rate configfiles/PurewaterLi9/PurewaterLi9RateConfig
 myPureWaterLi9Plots PurewaterLi9Plots configfiles/PurewaterLi9/PurewaterLi9PlotsConfig
 myGracefulStop GracefulStop configfiles/PurewaterLi9/GracefulStopConfig
+#myPlotMuonDtDlt PlotMuonDtDlt configfiles/PurewaterLi9/PlotMuonDtDltConfig
+#myFitLi9Lifetime FitLi9Lifetime configfiles/PurewaterLi9/FitLi9LifetimeConfig
+#myFitPurewaterLi9NcaptureDt FitPurewaterLi9NcaptureDt configfiles/PurewaterLi9/FitPurewaterLi9NcaptureDtConfig
+#myPlotMuonDtDlt PlotMuonDtDlt configfiles/PurewaterLi9/PlotMuonDtDltConfig
+myFitSpallationDt FitSpallationDt configfiles/PurewaterLi9/FitSpallationDtConfig
+# energy distribution for spallation
+# energy distribution for Li9 specifically

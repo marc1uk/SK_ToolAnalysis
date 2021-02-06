@@ -54,6 +54,7 @@ bool LoadBetaSpectraFluka::Initialise(std::string configfile, DataModel &data){
 	m_variables.Get("mapsFile",mapsFile);              // booststore file to write
 	m_variables.Get("maxEvents",maxEvents);            // user limit to number of events to process
 	m_variables.Get("bonsai_goodness_cut",bonsai_goodness_cut); // skip poorly reconstructed events
+	m_variables.Get("bonsai_maxE_cut",bonsai_maxE_cut); // skip events with very high reconstructed E
 	
 	// open the input TFile and TTree
 	// ------------------------------
@@ -132,16 +133,25 @@ bool LoadBetaSpectraFluka::Analyse(){
 	Log(toolName+" Bonsai goodness is "+toString(bonsai_goodness),v_debug,verbosity);
 	if(bonsai_goodness<bonsai_goodness_cut) return true;
 	
+	// we also seem to have events where the bonsai energy is up at like 10k
+	// even with a goodness > 0.4, so skip those
+	if(bonsai_energy>bonsai_maxE_cut) return true;
+	
+	// when comparing true and reconstructed energy
+	// for decays with both gammas and betas, both contribute
+	// so we should use true energy that is the sum of both
+	double true_total_energy = true_photon_E + true_beta_E;
+	
 	Log(toolName+" Filling histos",v_debug,verbosity);
-	true_spectra.at(isotope).Fill(true_beta_E);
+	true_spectra.at(isotope).Fill(true_total_energy);
 	reco_spectra.at(isotope).Fill(bonsai_energy);
-	reco_over_true_spectra.at(isotope).Fill(bonsai_energy/true_beta_E);
+	reco_over_true_spectra.at(isotope).Fill(bonsai_energy/true_total_energy);
 	
 	Log(toolName+" incrementing counters",v_debug,verbosity);
-	if(true_beta_E < 8.0) ++true_events_below_8MeV.at(isotope);
+	if(true_total_energy < 8.0) ++true_events_below_8MeV.at(isotope);
 	else ++true_events_above_8MeV.at(isotope);
 	
-	if(true_beta_E < 6.0) ++true_events_below_6MeV.at(isotope);
+	if(true_total_energy < 6.0) ++true_events_below_6MeV.at(isotope);
 	else ++true_events_above_6MeV.at(isotope);
 	
 	if(bonsai_energy < 8.0) ++reco_events_below_8MeV.at(isotope);
@@ -240,7 +250,7 @@ int LoadBetaSpectraFluka::GetBranches(){
 //		(myTreeReader.GetBranchValue("npart",npart))                 && // ==1 if no photon, ==2 if photons
 //		(myTreeReader.GetBranchValue("true_pos",true_decay_pos))     && // 
 		(myTreeReader.GetBranchValue("true_betaene",true_beta_E))    && // 
-//		(myTreeReader.GetBranchValue("true_phene",true_photon_E))    && // 0=none. Seems at most 1 given by Fluka.
+		(myTreeReader.GetBranchValue("true_phene",true_photon_E))    && // 0=none. Seems at most 1 given by Fluka.
 //		(myTreeReader.GetBranchValue("bons_pos",bonsai_pos))         && // position reconstructed by Bonsai
 		(myTreeReader.GetBranchValue("bons_ene",bonsai_energy))      && // energy reconstructed by Bonsai
 		(myTreeReader.GetBranchValue("bons_good",bonsai_goodness))      // goodness of Bonsai reconstruction

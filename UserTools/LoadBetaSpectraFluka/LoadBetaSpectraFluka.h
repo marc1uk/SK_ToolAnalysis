@@ -45,6 +45,7 @@ class LoadBetaSpectraFluka: public Tool {
 	int maxEvents;
 	int entrynum=0;
 	double bonsai_goodness_cut=0.4;
+	double bonsai_maxE_cut=1000;
 	
 	// verbosity levels: if 'verbosity' < this level, the message type will be logged.
 	int verbosity=1;
@@ -67,7 +68,7 @@ class LoadBetaSpectraFluka: public Tool {
 //	int npart;
 //	double true_decay_pos[3];
 	double true_beta_E;
-//	double true_photon_E;
+	double true_photon_E;
 //	double bonsai_pos[3];
 	double bonsai_energy;
 	double bonsai_goodness;

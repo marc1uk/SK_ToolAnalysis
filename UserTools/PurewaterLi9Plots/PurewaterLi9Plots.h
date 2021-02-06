@@ -9,14 +9,9 @@
 #include "Algorithms.h"
 #include "MTreeReader.h"
 #include "MTreeSelection.h"
-#include "ColourWheel.h"
 #include "SkrootHeaders.h"    // MCInfo, Header etc.
 #include "thirdredvars.h"     // ThirdRed class
 
-class TH1F;
-class TGraphErrors;
-class TF1;
-class THStack;
 class TSpline3;
 
 /**
@@ -58,11 +53,7 @@ class PurewaterLi9Plots: public Tool {
 	std::string topCutName;                                     // name of loosest cut we need every entry from
 	std::string valuesFile="li9_values.bs";                     // save or read values from BoostStore
 	std::string valuesFileMode="";                              // "read", "write" or anything else = neither
-	std::string efficienciesFile="FlukaBetaEfficiencies.bs";    // BoostStore of efficiencies of energy thresholds
 	int show_plots=0;                                           // if we want to show plots, not just save them
-	double ncut_li9=0.995; // this should be read from the cut threshold used in PurewaterLi9Rate
-	double cut_lowth = 0.999; // i dunno, comes from cut_third.cpp in li9 stuff
-	double paper_scaling = 1.;
 	
 	// output file of plots and fits
 	TFile* outfile=nullptr;                                     // the output TFile
@@ -77,42 +68,13 @@ class PurewaterLi9Plots: public Tool {
 	bool CreateOutputFile(std::string outputFile);
 	void CloseFile();
 	
-	bool GetEnergyCutEfficiencies();
-	
 	bool Analyse();        // main body
-	bool PlotMuonDt();
-	bool PlotMuonDlt();
-	bool PlotPaperDt(THStack& ourplots);
-	bool PlotPaperDlt(THStack& ourplots);
-	bool PlotSpallationDt();
-	bool FitSpallationDt(TH1F& dt_mu_lowe_hist_short, TH1F& dt_mu_lowe_hist_log, int rangenum);
-	
-	// li9 lifetime fits
-	bool PlotLi9LifetimeDt();
-	double BinnedLi9DtChi2Fit(TH1F* li9_muon_dt_hist);
-	
-	// li9 ncapture fits
-	bool PlotNcaptureDt();
-	double BinnedNcapDtChi2Fit(TH1F* li9_ncap_dt_hist);
-	bool UnbinnedNcapDtLogLikeFit(TH1F* li9_ncap_dt_hist, double num_li9_events);
-	double ncap_lifetime_loglike(double* x, double* par);
 	
 	// plot li9 (and backgrounds, TODO) beta spectrum
 	bool PlotLi9BetaEnergy();
 //	void MeasureDltSystematic(); // TODO
 //	void MeasureIsotopeRates();  // TODO
 	double AddLastRunTime();
-	
-	// helper functions used in FitSpallationDt
-	std::vector<double> MakeLogBins(double xmin, double xmax, int nbins);
-	void FixLifetime(TF1& func, std::string isotope);
-	void PushFitAmp(TF1& func, std::string isotope);
-	void PushFitAmp(double amp, std::string isotope);
-	void PullFitAmp(TF1& func, std::string isotope, bool fix=true);
-	void PullPaperAmp(TF1& func, std::string isotope, bool threshold_scaling=true, double fixed_scaling=1.);
-	void BuildPaperPlot();
-	TF1 BuildFunction(std::vector<std::string> isotopes, double func_min=0, double func_max=30);
-	TF1 BuildFunction2(std::vector<std::string> isotopes, double func_min=0, double func_max=30);
 	
 	// helper stuff used in li9 calculation
 	// ROC curve reading for ntag
@@ -165,25 +127,8 @@ class PurewaterLi9Plots: public Tool {
 //	basic_array<float*> neutdiff;                    // ?
 	basic_array<float*> closest_lowe_60s;            // closest distance to another lowe event within 60s??
 	
-	// histogram ranges
-	// ==================
-	float li9_lifetime_dtmin;         // range of dt_mu_lowe values to accept
-	float li9_lifetime_dtmax;         // for Li9 candidates, seconds
-	float ncap_dtmin;                 // range of dt_mu_ncap values to accept
-	float ncap_dtmax;                 // for Li9 abundance extraction, **microseconds**
-	
 	// aggregate values
 	double livetime=1;
-	double fiducial_vol = 22.5; // kton, from paper
-	
-	// energy threshold comparison
-	// ===========================
-	std::map<std::string, double> true_effs_6mev;
-	std::map<std::string, double> true_effs_8mev;
-	std::map<std::string, double> true_effs_scaling;
-	std::map<std::string, double> reco_effs_6mev;
-	std::map<std::string, double> reco_effs_8mev;
-	std::map<std::string, double> reco_effs_scaling;
 	
 	// variables to save/plot
 	// ======================
@@ -214,11 +159,6 @@ class PurewaterLi9Plots: public Tool {
 	std::vector<float> li9_ntag_dt_vals;
 	// distribution of lowe energies for mu+li9+ntag triplets
 	std::vector<float> li9_e_vals;
-	
-	// results used in fitting of the number of isotope events
-	std::map<std::string,double> fit_amps;
-	
-	ColourWheel colourwheel;
 	
 	// standard tool stuff
 	// ===================

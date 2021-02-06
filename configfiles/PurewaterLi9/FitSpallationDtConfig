@@ -1,0 +1,4 @@
+verbosity 1
+outputFile ""
+paper_scaling 1.0                 # (3.5E4/1E5), but this doesn't account for different energy threshold
+efficienciesFile FlukaBetaEfficiencies_bsgoodcut_bsmaxcut_totE.bs
