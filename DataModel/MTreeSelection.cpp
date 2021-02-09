@@ -565,7 +565,12 @@ std::set<size_t> MTreeSelection::GetPassingIndexes(std::string cutname){
 		std::cerr<<"MTreeSelection::GetPassingIndexes called with unknown cut "<<cutname<<std::endl;
 		return std::set<size_t>{};
 	}
-	return cut_pass_entries[cutname]->GetPassingIndexes();
+	if(did_pass_cut[cutname]){
+		return cut_pass_entries[cutname]->GetPassingIndexes();
+	} else {
+		// if it didn't pass the cut, it has no indices this entry
+		return std::set<size_t>{};
+	}
 }
 
 std::set<std::vector<size_t>> MTreeSelection::GetPassingIndices(std::string cutname){
@@ -573,7 +578,12 @@ std::set<std::vector<size_t>> MTreeSelection::GetPassingIndices(std::string cutn
 		std::cerr<<"MTreeSelection::GetPassingIndices called with unknown cut "<<cutname<<std::endl;
 		return std::set<std::vector<size_t>>{};
 	}
-	return cut_pass_entries[cutname]->GetPassingIndices();
+	if(did_pass_cut[cutname]){
+		return cut_pass_entries[cutname]->GetPassingIndices();
+	} else {
+		// if it didn't pass the cut, it has no indices this entry
+		return std::set<std::vector<size_t>>{};
+	}
 }
 
 MTreeReader* MTreeSelection::GetTreeReader(){
