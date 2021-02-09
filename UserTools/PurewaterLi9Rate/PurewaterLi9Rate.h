@@ -111,8 +111,8 @@ class PurewaterLi9Rate: public Tool {
 	
 	// variables to write out
 	// ======================
-	struct tm runstart;
-	struct tm runend;
+	struct tm runstart = {0};
+	struct tm runend = {0};
 	int current_run=0;
 	double livetime=0;
 	// output is handled by the MTreeSelection

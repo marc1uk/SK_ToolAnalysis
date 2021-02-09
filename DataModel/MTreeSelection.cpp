@@ -516,7 +516,7 @@ Long64_t MTreeSelection::GetNextEntry(std::string cutname){
 		for(auto&& acut : cut_pass_entries){
 			if(acut.first==cutname) continue; // already did this one
 			Long64_t next_passing_entry = acut.second->GetCurrentEntry();
-			while((next_passing_entry<current_entry) && (next_passing_entry>0)){
+			while((next_passing_entry<current_entry) && (next_passing_entry>=0)){
 				next_passing_entry = acut.second->GetNextEntry();
 			};
 		}

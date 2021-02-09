@@ -1,6 +1,4 @@
 verbosity 1
-#inputFile /host/software/relic_sk4_ana/li9/subsetfile.root
-#outputFile /host/software/relic_sk4_ana/li9/li9_results.root
 inputFile /disk02/lowe8/relic_sk4/dec20/data/for_ntag/spall_resq_oldbdt_nlow1/relic.precut.leaf.ntag_oldbdt_nlow1.spall_new_resq.061525.077958.root
 cutFile li9_selections.root
 outputFile li9_results.root

@@ -118,8 +118,13 @@ bool PurewaterLi9Plots::Execute(){
 	try{
 		Analyse();
 	}
-	catch (...){
-		Log(toolName+" encountered error doing Analyse!",v_error,verbosity);
+	catch(std::exception& e){
+		Log(toolName+" encountered error "+e.what()+" during Analyse() at "+__FILE__+"::"
+			+std::to_string(__LINE__),v_error,verbosity);
+		// __FILE__ gives the current file name
+		// __func__ gives current function name
+		// __LINE__ gives current line
+		// unfortunately these do not refer to the throw site, but rather the site at which they're used
 	}
 	
 	// Get next entry
@@ -267,7 +272,7 @@ bool PurewaterLi9Plots::Analyse(){
 	// pre muons
 	// only consider first muboy muon (only for multi-mu events?)
 	std::set<size_t> pre_muboy_first_muons = myTreeSelections->GetPassingIndexes("pre_muon_muboy_i==0");
-	for(int mu_i : pre_muboy_first_muons){
+	for(size_t mu_i : pre_muboy_first_muons){
 		Log(toolName+" filling spallation dt and dlt distributions",v_debug+2,verbosity);
 		dlt_vals_pre.at(mu_class[mu_i]).push_back(dlt_mu_lowe[mu_i]);   // FIXME weight by num_pre_muons
 		dt_vals_pre.at(mu_class[mu_i]).push_back(dt_mu_lowe[mu_i]);     // FIXME weight by num_pre_muons
@@ -286,7 +291,7 @@ bool PurewaterLi9Plots::Analyse(){
 	}
 	// post muons
 	std::set<size_t> post_muboy_first_muons = myTreeSelections->GetPassingIndexes("post_muon_muboy_i==0");
-	for(int mu_i : post_muboy_first_muons){
+	for(size_t mu_i : post_muboy_first_muons){
 		Log(toolName+" filling spallation dt and dlt distributions",v_debug+2,verbosity);
 		dlt_vals_post.at(mu_class[mu_i]).push_back(dlt_mu_lowe[mu_i]);   // FIXME weight by num_post_muons
 		dt_vals_post.at(mu_class[mu_i]).push_back(dt_mu_lowe[mu_i]);     // FIXME weight by num_post_muons

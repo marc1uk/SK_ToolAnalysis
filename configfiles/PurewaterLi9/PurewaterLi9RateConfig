@@ -16,6 +16,10 @@ ntag_FOM_threshold 0.995        # nominal BDT FOM threshold for Li9 tagging (ncu
 li9_lifetime_dtmin 0.05         # [us]  range of mu_lowe dt values to use for Li9 sample
 li9_lifetime_dtmax 0.5          # [us]
 
-run_min 68671                   # SHE trigger threshold lowered to 8 MeV
-run_max 73031                   # Yang Zhang's time range
-first_entry 152882              # first TTree entry - first entry of run 68671
+# specify first run to start processing
+run_min 61525                   # start of SK-IV, QBEE installed, Low-E threshold lowered to 3.5 MeV
+#run_min 68671                   # SHE (AFT?) trigger threshold lowered to 8 (7.5?) MeV - use for ntagging
+run_max 73031                   # end of Yang Zhang's time range
+# we can skip repeatedly scanning for this by instead (or also) passing the first TTree entry to use
+first_entry 0                   # first TTree entry of run 61525 (2015 paper used for SPALLATION)
+#first_entry 152882              # first TTree entry of run 68671 (2015 used for NTAG)

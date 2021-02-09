@@ -86,7 +86,7 @@ bool PurewaterLi9Rate::Initialise(std::string configfile, DataModel &data){
 	std::vector<std::pair<std::string, std::vector<std::string>>> cut_names{
 		// cut name						// list of branches whose indices are required to identify this event
 		{"all",							{}},   // order of the branches specified here must match
-		{"68671<run<73031",				{}},   // the order of indices given to AddPassingEvent!
+		{"61525<run<73031",				{}},   // the order of indices given to AddPassingEvent!
 		//{"SNR>0.5",					{}},   // already applied as part of online first reduction*
 		{"dwall>200cm",					{}},   // already applied as part of online first reduction*
 		{"dt_mu_lowe>50us",				{}},   // already applied as part of online first reduction*
@@ -122,10 +122,6 @@ bool PurewaterLi9Rate::Initialise(std::string configfile, DataModel &data){
 	// pass it to downstream tools processing this cut at the same time
 	intptr_t myTreeSelectionsPtr = reinterpret_cast<intptr_t>(&myTreeSelections);
 	m_data->CStore.Set("MTreeSelection",myTreeSelectionsPtr);
-	
-	// initialise both to current time so they're the same
-	runstart = *localtime(nullptr);
-	runend = runstart;
 	
 	toolchain_start=std::chrono::high_resolution_clock::now();
 	
@@ -255,7 +251,7 @@ bool PurewaterLi9Rate::Analyse(){
 		return false;
 	}
 	//if (HEADER->nrunsk > 74781) return false;  // WIT started after this run. What's the significance of this?
-	myTreeSelections.AddPassingEvent("68671<run<73031");
+	myTreeSelections.AddPassingEvent("61525<run<73031");
 	
 	// if this is the first event of a new run, add the run livetime
 	if(HEADER->nrunsk > current_run){
@@ -265,7 +261,7 @@ bool PurewaterLi9Rate::Analyse(){
 		livetime += difftime(mktime(&runstart), mktime(&runend));
 		
 		// set the new run start to this event's timestamp
-		runstart.tm_year = HEADER->ndaysk[0] - 1900;
+		runstart.tm_year = HEADER->ndaysk[0];
 		runstart.tm_mon = HEADER->ndaysk[1] - 1;
 		runstart.tm_mday = HEADER->ndaysk[2];
 		runstart.tm_hour = HEADER->ntimsk[0];
@@ -274,7 +270,7 @@ bool PurewaterLi9Rate::Analyse(){
 	}
 	
 	// every time update the end of run timestamp to this event's timestamp.
-	runend.tm_year = HEADER->ndaysk[0] - 1900;
+	runend.tm_year = HEADER->ndaysk[0];
 	runend.tm_mon = HEADER->ndaysk[1] - 1;
 	runend.tm_mday = HEADER->ndaysk[2];
 	runend.tm_hour = HEADER->ntimsk[0];
