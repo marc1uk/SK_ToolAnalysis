@@ -22,36 +22,42 @@
 #include "Algorithms.h"  // CheckPath
 
 // TODO constructor/loader for tchains or tree pointers
-/* TODO move this checking code into other constructors; usually we implicitly invoke the
-   TODO default constructor since the TreeReader is a member of the tool: we simply call 'Load'
+
 MTreeReader::MTreeReader(std::string fpath, std::string treename){
-	
+	Load(fpath, treename);
+}
+
+int MTreeReader::Load(std::string filename, std::string treename){
+	// determine if filename is an actual file or a pattern (TChain)
 	std::string pathtype;
-	bool pathexists = CheckPath(fpath, pathtype);
-	
+	bool pathexists = CheckPath(filename, pathtype);
 	if(pathexists && pathtype=="f"){
 		// given a file: load it as normal
-		Load(fpath, treename);
+		int ok = LoadFile(filename);
+		if(not ok) return ok;
+		LoadTree(treename);
+		if(not ok) return ok;
 	} else if(pathexists && pathtype=="d"){
-		// given a directory: we can't work with this
+		// given a directory: we can't work with just this
 		std::cerr<<"!!! MTreeReader constructor called with a path to a directory !!!"<<std::endl
 				 <<"Please pass either a path to a file or a glob pattern"<<std::endl
-				 <<"The passed path was "<<fpath<<std::endl;
+				 <<"The passed path was "<<filename<<std::endl;
 	} else if(pathexists){
-		// stat indicated that this was neither path nor directory?
+		// stat indicated that this path exists, but was neither path nor directory?
 		std::cerr<<"!!! MTreeReader constructor called with a path to an unknown resource type !!!"<<std::endl
 				 <<"Please pass either a path to a file or a glob pattern"<<std::endl
-				 <<"The passed path was "<<fpath<<", type was "<<pathtype<<std::endl;
+				 <<"The passed path was "<<filename<<", type was "<<pathtype<<std::endl;
 	} else {
 		// path does not exist - it could be a glob pattern
 		// try to construct a TChain from it
 		TChain* chain = new TChain(treename.c_str());
-		int filesadded = chain->Add(fpath.c_str());
+		if(verbosity) std::cout<<"loading TChain '"<<treename<<"' with files "<<filename<<std::endl;
+		int filesadded = chain->Add(filename.c_str());
 		// ↑ note this does not check the files contain the correct TTree!
 		if(filesadded==0){
 			std::cerr<<"!!! MTreeReader constructor called with a non-existant input path !!!"<<std::endl
 					 <<"An attempt to use this as a pattern to construct a TChain found no files!"<<std::endl
-					 <<"The passed path was "<<fpath<<std::endl;
+					 <<"The passed path was "<<filename<<std::endl;
 		} else {
 			int localEntry = chain->LoadTree(0);
 			if(localEntry<0){
@@ -60,17 +66,14 @@ MTreeReader::MTreeReader(std::string fpath, std::string treename){
 						 <<filesadded<<" files, but loading the first TTree failed with code "
 						 <<localEntry<<"!"<<std::endl
 						 <<"Is the tree name \""<<treename<<"\" correct?"<<std::endl
-						 <<"The passed path was "<<fpath<<std::endl;
+						 <<"The passed path was "<<filename<<std::endl;
 			} else {
 				Load(chain);
 			}
 		}
 	}
-}
-*/
-
-MTreeReader::MTreeReader(std::string fpath, std::string treename){
-	Load(fpath, treename);
+	int ok = ParseBranches();
+	return ok;
 }
 
 int MTreeReader::Load(TChain* chain){
@@ -81,17 +84,8 @@ int MTreeReader::Load(TChain* chain){
 	return ok;
 }
 
-int MTreeReader::Load(std::string filename, std::string treename){
-	int ok = LoadFile(filename);
-	if(not ok) return ok;
-	LoadTree(treename);
-	if(not ok) return ok;
-	ok = ParseBranches();
-	return ok;
-}
-
 int MTreeReader::LoadFile(std::string filename){
-	if(verbosity) std::cout<<"getting file"<<std::endl;
+	if(verbosity) std::cout<<"getting file "<<filename<<std::endl;
 	thefile = TFile::Open(filename.c_str());
 	if(not thefile){
 		std::cerr<<"MTreeReader failed to load file "<<filename<<std::endl;

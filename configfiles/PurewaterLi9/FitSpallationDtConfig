@@ -2,3 +2,11 @@ verbosity 1
 outputFile ""
 paper_scaling 1.0                 # (3.5E4/1E5), but this doesn't account for different energy threshold
 efficienciesFile FlukaBetaEfficiencies_bsgoodcut_bsmaxcut_totE.bs
+
+# specify the following to read dt values from spallation file
+# DO NOT specify inputFile with a ToolChain using PurewaterLi9Plots
+inputFile /disk02/lowe8/relic_sk4/may20/data/spainfo/data/spainfo.*.root
+#inputFile spainfo.*.root
+treeName spall
+maxEvents -1
+livetime 1

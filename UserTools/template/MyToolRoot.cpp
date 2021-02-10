@@ -22,13 +22,18 @@ bool MyToolRoot::Initialise(std::string configfile, DataModel &data){
 	// Get the Tool configuration variables
 	// ------------------------------------
 	m_variables.Get("verbosity",verbosity);            // how verbose to be
-	m_variables.Get("inputFile",inputFile);            // a single specific input file
+	m_variables.Get("inputFile",inputFile);            // the input file(s)
+	m_variables.Get("treeName",treeName);              // the name of the TTree to process
 	m_variables.Get("outputFile",outputFile);          // output file to write
 	m_variables.Get("maxEvents",maxEvents);            // user limit to number of events to process
 	
 	// open the input TFile and TTree
 	// ------------------------------
-	get_ok = myTreeReader.Load(inputFile, "eventtree");
+	get_ok = myTreeReader.Load(inputFile, treeName);
+	if(not get_ok){
+		Log(toolName+" failed to open reader on tree "+treeName+" in file "+inputFile,v_error,verbosity);
+		return false;
+	}
 	DisableUnusedBranches();  // for efficiency of reading, only enable used branches
 	
 	return true;
@@ -46,11 +51,11 @@ bool MyToolRoot::Execute(){
 	try{
 		Analyse();
 	}
-	catch(...){
-		// catch any exceptions to ensure we always
-		// increment the event number and load the next entry.
-		// This prevents us getting stuck in a loop
+	catch(std::exception& e){
+		// catch any exceptions to ensure we always increment the event number
+		// and load the next entry. This prevents us getting stuck in a loop
 		// forever processing the same broken entry!
+		Log(toolName+" encountered error "+e.what()+" during Analyse()",v_error,verbosity);
 	}
 	
 	// move to next entry

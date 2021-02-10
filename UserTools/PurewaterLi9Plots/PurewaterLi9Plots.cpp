@@ -65,10 +65,6 @@ bool PurewaterLi9Plots::Initialise(std::string configfile, DataModel &data){
 	//* unused when an upstream tool is driving the toolchain
 	//* when using values from a BoostStore the ROOT files do not need to be read
 	
-	// get the TApplication if we want to show plots on the fly
-	m_variables.Get("show_plots",show_plots);
-	if(show_plots) data.GetTApp(); // we don't really need it, just trigger its creation
-	
 	// if reading values from a BoostStore, we don't need to do any loops
 	if(valuesFileMode=="read"){
 		m_data->vars.Set("StopLoop",1); // jump straight to finalise

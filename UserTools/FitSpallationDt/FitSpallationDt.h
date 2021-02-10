@@ -34,6 +34,10 @@ class FitSpallationDt: public Tool {
 	private:
 	// functions
 	// =========
+	int ReadEntry(long entry_number);
+	int GetBranches();
+	bool Analyse();
+	int DisableUnusedBranches();
 	bool GetEnergyCutEfficiencies();
 	bool PlotSpallationDt();
 	bool FitDtDistribution(TH1F& dt_mu_lowe_hist_short, TH1F& dt_mu_lowe_hist_log, int rangenum);
@@ -44,6 +48,7 @@ class FitSpallationDt: public Tool {
 	void PushFitAmp(double amp, std::string isotope);
 	void PullFitAmp(TF1& func, std::string isotope, bool fix=true);
 	void PullPaperAmp(TF1& func, std::string isotope, bool threshold_scaling=true, double fixed_scaling=1.);
+	double GetPaperAmp(std::string isotope, bool threshold_scaling, double fixed_scaling);
 	void BuildPaperPlot();
 	TF1 BuildFunction(std::vector<std::string> isotopes, double func_min=0, double func_max=30);
 	TF1 BuildFunction2(std::vector<std::string> isotopes, double func_min=0, double func_max=30);
@@ -52,9 +57,16 @@ class FitSpallationDt: public Tool {
 	// ==============
 	std::string toolName;
 	std::string outputFile="";
+	std::string inputFile;
+	std::string treeName;
+	int maxEvents;
 	double paper_scaling = 1.;
 	std::string efficienciesFile="FlukaBetaEfficiencies.bs";    // BoostStore of efficiencies of energy thresholds
 	
+	MTreeReader myTreeReader; // the TTree reader
+	int entrynum=0;
+	float dt;                // this is the only variable we need to read
+	std::vector<float> my_dt_mu_lowe_vals;
 	double livetime=1;
 	
 	// energy threshold comparison

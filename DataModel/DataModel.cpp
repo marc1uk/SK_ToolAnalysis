@@ -1,6 +1,6 @@
 #include "DataModel.h"
 
-DataModel::DataModel(){ rootTApp=nullptr; }
+DataModel::DataModel(){ rootTApp = new TApplication("rootTApp",0,0); }
 DataModel::~DataModel(){ if(rootTApp) delete rootTApp; }
 
 /*

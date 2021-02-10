@@ -1,7 +1,6 @@
 include $(SKOFL_ROOT)/config.gmk  # pulls in libskroot.so as well
 
 # user library paths
-LDFLAGS = -L/host/software/skrootlibs -L/host/software/stllibs -L/host/software/relic_sk4_ana/relic_sk4_ana/data_reduc/third/lib
 LDFLAGS += -L/home/moflaher/skrootlibs -L/home/moflaher/stllibs -L/home/moflaher/relic_sk4_ana/relic_sk4_ana/data_reduc/third/lib
 # user libraries
 LOCAL_LIBS = -lRootStl -lthirdredvars
@@ -9,8 +8,16 @@ LOCAL_LIBS = -lRootStl -lthirdredvars
 LD_RUN_PATH=$(SKOFL_LIBDIR):$(A_LIBDIR)
 
 # C++ compiler flags - XXX config.gmk sets this already, so APPEND ONLY XXX
-#PROFLAGS= -g -pg -ggdb3
-CXXFLAGS    += $(PROFLAGS) -O3 -std=c++11 -fdiagnostics-color=always -Wno-reorder -Wno-sign-compare -Wno-unused-variable -Wno-unused-but-set-variable -Wl,--as-needed
+CXXFLAGS    += -g -O3 -std=c++11 -fdiagnostics-color=always -Wno-reorder -Wno-sign-compare -Wno-unused-variable -Wno-unused-but-set-variable -Wl,--as-needed
+#-D_GLIBCXX_DEBUG  << g++ debug mode. immediate segfault...
+
+# flags required for gprof profiling
+#CXXFLAGS    += -g -pg -ggdb3
+
+# ToolDAQFramework debug mode: disable the try{}-catch{} around all Tool methods.
+# Combine with -lSegFault to cause exceptions to invoke a segfault, printing a backtrace.
+#CXXFLAGS     += -DDEBUG
+#LDFLAGS      += -lSegFault
 
 ToolDAQPath=ToolDAQ
 ZMQLib= -L $(ToolDAQPath)/zeromq-4.0.7/lib -lzmq 

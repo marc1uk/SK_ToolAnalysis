@@ -38,6 +38,7 @@ class MyToolRoot: public Tool {
 	// ==============
 	std::string toolName;
 	std::string inputFile;
+	std::string treeName;
 	std::string outputFile;
 	int maxEvents;
 	int entrynum=0;

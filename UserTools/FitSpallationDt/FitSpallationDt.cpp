@@ -104,11 +104,34 @@ bool FitSpallationDt::Initialise(std::string configfile, DataModel &data){
 	// hacky way to scale the total number of events when comparing to the paper plots
 	m_variables.Get("paper_scaling",paper_scaling);
 	
+	// normally this Tool obtains its data from PurewaterLi9Plots, which fills the vector
+	// of spallation muon to lowe event time differences (dt_mu_lowe_vals)
+	// and places a pointer to it in the CStore. However we also support filling that
+	// vector from spallation files directly
+	m_variables.Get("inputFile",inputFile);            // input spallation files for dt values
+	m_variables.Get("treeName",treeName);              // name of input tree in spallation files
+	m_variables.Get("maxEvents",maxEvents);            // user limit to number of events to process
+	m_variables.Get("livetime",livetime);              // if not provided by upstream tool
+	
 	// energy threshold efficiencies, from FLUKA
 	m_variables.Get("efficienciesFile",efficienciesFile);
 	
 	// read efficiencies of the different thresholds of old vs new data
 	GetEnergyCutEfficiencies();
+	
+	// quick hack to load data from spallation files by laura for validation
+	if(inputFile!=""){
+		get_ok = myTreeReader.Load(inputFile, treeName);
+		if(not get_ok){
+			Log(toolName+" failed to open reader on tree "+treeName+" in file "+inputFile,v_error,verbosity);
+			return false;
+		}
+		DisableUnusedBranches();  // for efficiency of reading, only enable used branches
+		
+		// normally populated by upstream tools
+		m_data->CStore.Set("livetime",livetime);
+		m_data->CStore.Set("dt_mu_lowe_vals",&my_dt_mu_lowe_vals);
+	}
 	
 	return true;
 }
@@ -116,7 +139,83 @@ bool FitSpallationDt::Initialise(std::string configfile, DataModel &data){
 
 bool FitSpallationDt::Execute(){
 	
+	Log(toolName+" getting entry "+toString(entrynum),v_debug,verbosity);
+	
+	// retrieve desired branches
+	get_ok = GetBranches();
+	
+	// process the data
+	try{
+		Analyse();
+	}
+	catch(std::exception& e){
+		// catch any exceptions to ensure we always increment the event number
+		// and load the next entry. This prevents us getting stuck in a loop
+		// forever processing the same broken entry!
+		Log(toolName+" encountered error "+e.what()+" during Analyse()",v_error,verbosity);
+	}
+	
+	// move to next entry
+	entrynum++;
+	// check if we've hit the user-requested entry limit
+	if((maxEvents>0)&&(entrynum==maxEvents)){
+		Log(toolName+" hit max events, setting StopLoop",v_error,verbosity);
+		m_data->vars.Set("StopLoop",1);
+		return 1;
+	}
+	
+	// pre-load the next ttree entry
+	get_ok = ReadEntry(entrynum);
+	if(get_ok==0){
+		return 1; // end of file
+	} else if (get_ok<0){
+		return 0; // read error
+	}
+	
 	return true;
+}
+
+bool FitSpallationDt::Analyse(){
+	// we do our analysis (fitting the distribution) in finalise
+	// all we need to do here is add the next dt value
+	my_dt_mu_lowe_vals.push_back(dt);
+	return true;
+}
+
+int FitSpallationDt::ReadEntry(long entry_number){
+	// load next entry data from TTree
+	int bytesread = myTreeReader.GetEntry(entry_number);
+	
+	// stop loop if we ran off the end of the tree
+	if(bytesread==0){
+		Log(toolName+" hit end of input file, stopping loop",v_message,verbosity);
+		m_data->vars.Set("StopLoop",1);
+	}
+	// stop loop if we had an error of some kind
+	else if(bytesread<0){
+		 if(bytesread==-1) Log(toolName+" IO error loading next input entry!",v_error,verbosity);
+		 if(bytesread==-2) Log(toolName+" AutoClear error loading next input entry!",v_error,verbosity);
+		 if(bytesread <-2) Log(toolName+" Unknown error "+toString(bytesread)
+		                       +" loading next input entry!",v_error,verbosity);
+		 m_data->vars.Set("StopLoop",1);
+	}
+	
+	return bytesread;
+}
+
+int FitSpallationDt::GetBranches(){
+	int success = (
+		(myTreeReader.GetBranchValue("dt",dt))
+	);
+	return success;
+}
+
+int FitSpallationDt::DisableUnusedBranches(){
+	std::vector<std::string> used_branches{
+		// list used branches here
+		"dt"
+	};
+	return myTreeReader.OnlyEnableBranches(used_branches);
 }
 
 
@@ -158,6 +257,7 @@ bool FitSpallationDt::PlotSpallationDt(){
 		Log(toolName+" Error! No dt_mu_lowe_vals in CStore!",v_error,verbosity);
 		return true;
 	}
+	std::cout<<"fitting "<<dt_mu_lowe_vals->size()<<" spallation dt values"<<std::endl;
 	
 	// we also need the livetime to convert number of events to rates
 	get_ok = m_data->CStore.Get("livetime",livetime);
@@ -441,20 +541,21 @@ bool FitSpallationDt::FitDtDistribution(TH1F& dt_mu_lowe_hist, TH1F& dt_mu_lowe_
 		gPad->SetLogy();
 		
 		// since we're having issues, let's see how well the old results fit our data
-		TF1 func_paper = BuildFunction({"12B","12N","16N","11Be","9Li","8He_9C","8Li","8B","15C"},0,30);
+		TF1 func_paper = BuildFunction2({"12B","12N","16N","11Be","9Li","8He_9C","8Li","8B","15C"},0,30);
 		// scale the paper down to be around the same num events as us, to ease comparison
 		std::cout<<"retrieving paper results"<<std::endl;
-		PullPaperAmp(func_paper,"12B",true,paper_scaling);
-		PullPaperAmp(func_paper,"12N",true,paper_scaling);
-		PullPaperAmp(func_paper,"16N",true,paper_scaling);
-		PullPaperAmp(func_paper,"11Be",true,paper_scaling);
-		PullPaperAmp(func_paper,"9Li",true,paper_scaling);
-		PullPaperAmp(func_paper,"8He_9C",true,paper_scaling);
-		//PullPaperAmp(func_paper,"8Li_8B",true,paper_scaling);
-		PullPaperAmp(func_paper,"8Li",true,paper_scaling);
-		PullPaperAmp(func_paper,"8B",true,paper_scaling);
-		PullPaperAmp(func_paper,"15C",true,paper_scaling);
-		PullPaperAmp(func_paper,"const",true,paper_scaling);
+		bool correct_energy_threshold = false;
+		PullPaperAmp(func_paper,"12B",correct_energy_threshold,paper_scaling);
+		PullPaperAmp(func_paper,"12N",correct_energy_threshold,paper_scaling);
+		PullPaperAmp(func_paper,"16N",correct_energy_threshold,paper_scaling);
+		PullPaperAmp(func_paper,"11Be",correct_energy_threshold,paper_scaling);
+		PullPaperAmp(func_paper,"9Li",correct_energy_threshold,paper_scaling);
+		PullPaperAmp(func_paper,"8He_9C",correct_energy_threshold,paper_scaling);
+		//PullPaperAmp(func_paper,"8Li_8B",correct_energy_threshold,paper_scaling);
+		PullPaperAmp(func_paper,"8Li",correct_energy_threshold,paper_scaling);
+		PullPaperAmp(func_paper,"8B",correct_energy_threshold,paper_scaling);
+		PullPaperAmp(func_paper,"15C",correct_energy_threshold,paper_scaling);
+		PullPaperAmp(func_paper,"const",correct_energy_threshold,paper_scaling);
 		func_paper.SetLineColor(kViolet);
 		func_paper.Draw("same");
 		
@@ -630,7 +731,7 @@ void FitSpallationDt::BuildPaperPlot(){
 }
 
 // this is the true BuildFunction
-TF1 FitSpallationDt::BuildFunction(std::vector<std::string> isotopes, double func_min, double func_max){
+TF1 FitSpallationDt::BuildFunction2(std::vector<std::string> isotopes, double func_min, double func_max){
 	std::string total_func="";
 	std::string func_name="";
 	std::map<std::string,int> parameter_posns;
@@ -723,7 +824,7 @@ TF1 FitSpallationDt::BuildFunction(std::vector<std::string> isotopes, double fun
 }
 
 // this is the hack
-TF1 FitSpallationDt::BuildFunction2(std::vector<std::string> isotopes, double func_min, double func_max){
+TF1 FitSpallationDt::BuildFunction(std::vector<std::string> isotopes, double func_min, double func_max){
 	std::string total_func="";
 	std::string func_name="";
 	std::map<std::string,int> parameter_posns;
@@ -737,13 +838,12 @@ TF1 FitSpallationDt::BuildFunction2(std::vector<std::string> isotopes, double fu
 			std::cout<<"not a pair"<<std::endl;
 			int first_index=next_par_index;
 			
-			double paperval = papervals.at(anisotope) * (lifetimes.at(anisotope)/0.006);
-			// scale to match our max
-			paperval *= reco_effs_scaling.at(anisotope); // isotope-dependent scaling from change in E thresh
-			paperval *= paper_scaling;                   // a fixed scaling... just in case we want to do this
+			// get paper amplitude, corrected for energy efficiency and scaled by config file scaling
+			double paperval = GetPaperAmp(anisotope,true,paper_scaling);
 			std::string paperstring = std::to_string(paperval/2.); // fix half the paper val, fit the rest
 			// "((x.xx + abs([0]))/[1])*exp(-x/[1])"
-			std::string this_func =  "(("+paperstring+"+abs(["+toString(next_par_index)
+			std::string scalestring = "0.006*";
+			std::string this_func =  scalestring+"(("+paperstring+"+abs(["+toString(next_par_index)
 									+"]))/["+toString(next_par_index+1)
 									+"])*exp(-x/["+toString(next_par_index+1)+"])";
 			next_par_index +=2;
@@ -762,15 +862,16 @@ TF1 FitSpallationDt::BuildFunction2(std::vector<std::string> isotopes, double fu
 			// as they share an amplitude and constant
 			//"(x.xx + abs([0]))*0.5*(exp(-x/[1])/[1]+exp(-x/[2])/[2])
 			int first_index=next_par_index;
-			double paperval = papervals.at(first_isotope) * (lifetimes.at(first_isotope)/0.006);
-			// scale to match our max
-			// isotope-dependent scaling from change in E thresh
-			paperval *= 0.5*(reco_effs_scaling.at(first_isotope)+reco_effs_scaling.at(second_isotope));
-			// // a fixed scaling... just in case we want to do this
-			paperval *= paper_scaling;
+			
+			// get paper amplitude, corrected for energy efficiency and scaled by config file scaling
+			std::cout<<"getting paper amp"<<std::endl;
+			double paperval = GetPaperAmp(anisotope,true,paper_scaling);
+			std::cout<<"paperval= "<<paperval<<std::endl;
+			
 			// fix the abundance to at least half the paper val, fit the rest
 			std::string paperstring = std::to_string(paperval/2.);
-			std::string this_func =  "("+paperstring+"+abs(["+toString(next_par_index)+"]))*0.5*"
+			std::string scalestring = "0.006*";
+			std::string this_func =  scalestring+"("+paperstring+"+abs(["+toString(next_par_index)+"]))*0.5*"
 									+"(exp(-x/["+toString(next_par_index+1)+"])/" // don't increment index
 									+"["+toString(next_par_index+1)+"]+"
 									+"exp(-x/["+toString(next_par_index+2)+"])/"  // don't increment index
@@ -851,9 +952,9 @@ void FitSpallationDt::PullFitAmp(TF1& func, std::string isotope, bool fix){
 	}
 }
 
-void FitSpallationDt::PullPaperAmp(TF1& func, std::string isotope, bool threshold_scaling, double fixed_scaling){
-	double paperval = papervals.at(isotope);
-	std::cout<<"rate of "<<isotope<<" is "<<paperval<<std::endl;
+double FitSpallationDt::GetPaperAmp(std::string isotope, bool threshold_scaling, double fixed_scaling){
+	std::cout<<"getting paper amp for isotope "<<isotope<<std::endl;
+	double paperval;
 	if(isotope!="const"){
 		// the values in papervals are rates in events / kton / day, integrated over all beta energies.
 		// To obtain Ni, the initial number of observable events over our live time,
@@ -873,6 +974,7 @@ void FitSpallationDt::PullPaperAmp(TF1& func, std::string isotope, bool threshol
 				energy_cut_eff = papereffs.at(isotope);
 				std::cout<<" 6MeV cut efficiency is "<<energy_cut_eff<<std::endl;
 			}
+			paperval = papervals.at(isotope);
 		} else {
 			std::string first_isotope = isotope.substr(0,isotope.find_first_of("_"));
 			std::string second_isotope = isotope.substr(isotope.find_first_of("_")+1,std::string::npos);
@@ -883,20 +985,35 @@ void FitSpallationDt::PullPaperAmp(TF1& func, std::string isotope, bool threshol
 			} else {
 				energy_cut_eff = 0.5*(papereffs.at(first_isotope) + papereffs.at(second_isotope));
 			}
+			// for a pair of isotopes we may have one or both
+			if(papervals.count(isotope)){
+				// if we have a combined amplitude, use that
+				paperval = papervals.at(isotope);
+			} else {
+				// otherwise take the sum
+				double paperval1 = papervals.at(first_isotope);
+				double paperval2 = papervals.at(second_isotope);
+				paperval = (paperval1+paperval2);
+			}
 		}
 		// ok, convert Ri to Ni
 		paperval *= fiducial_vol * paper_livetime * (paper_first_reduction_eff/100.)
 					 * (paper_dlt_cut_eff/100.) * (energy_cut_eff/100.);
-		std::cout<<"Ni is "<<paperval<<std::endl;
+		std::cout<<"paper Ni is "<<paperval<<std::endl;
 	} else {
 		// the constant term isn't a rate, it's read straight off the plot so doesn't need conversion.
 		// But, if we're comparing across energy thresholds, it should also be scaled
 		// down by the relative rate of random backgrounds above 8MeV vs above 6MeV
 		// TODO obtain that number...
+		paperval = papervals.at(isotope); // for now just use the value read off the plot, no scaling
 	}
 	
 	paperval *= fixed_scaling; // superfluous, just in case
-	
+	return paperval;
+}
+
+void FitSpallationDt::PullPaperAmp(TF1& func, std::string isotope, bool threshold_scaling, double fixed_scaling){
+	double paperval = GetPaperAmp(isotope, threshold_scaling, fixed_scaling);
 	std::string parname = (isotope=="const") ? "const" : "amp_"+isotope;
 	func.SetParameter(parname.c_str(), paperval);
 }
