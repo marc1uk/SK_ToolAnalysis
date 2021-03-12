@@ -65,7 +65,102 @@ class MTreeReader {
 		return 1;
 	}
 	
-	// specialization for arrays
+	// specialization for array references
+	
+	// 1D variant
+	template<typename T, std::size_t N>
+	int GetBranchValue(std::string branchname, T (&ref_in)[N]){
+		return GetArrayBranchValue(branchname, &ref_in[0], N);
+	}
+	
+	// 2D variant
+	template<typename T, std::size_t N, std::size_t M>
+	int GetBranchValue(std::string branchname, T (&ref_in)[N][M]){
+		return GetArrayBranchValue(branchname, &ref_in[0][0], N, M);
+	}
+	
+	// 3D variant... that's as far as i'll go.
+	template<typename T, std::size_t N, std::size_t M, std::size_t S>
+	int GetBranchValue(std::string branchname, T (&ref_in)[N][M][S]){
+		return GetArrayBranchValue(branchname, &ref_in[0][0][0], N, M, S);
+	}
+	
+	// the above defer to this - copy the data to ther user's array
+	// (the user really ought not to pass us an array reference, as it requires
+	//  an unnecessary copy relative to just giving us a pointer we can direct,
+	//  but not accepting array references looks like a bug to the user)
+	template<typename T>
+	int GetArrayBranchValue(std::string branchname, T* arr_in, std::size_t NCOL, std::size_t NROW=1, std::size_t NAISLE=1){
+		// check we know this branch
+		if(branch_value_pointers.count(branchname)==0){
+			std::cerr<<"No such branch "<<branchname<<std::endl;
+			return 0;
+		}
+		// check if the branch is an array - this template specialization is only for arrays
+		if(not branch_isarray.at(branchname)){
+			std::cerr<<"Branch "<<branchname
+				 <<" is not an array; please check your datatype to GetBranchValue()"<<std::endl;
+			return 0;
+		}
+		// check the passed array has suitable dimensions.
+		// first we need to know the actual array dimensions
+		std::vector<size_t> branchdims = GetBranchDims(branchname);
+		// for dynamic arrays we may need to update our pointer to the stored array
+		// not sure if we should bail if the user is trying to put a dynamic array
+		// into a static-sized array variable.... continue for now.
+		UpdateBranchPointer(branchname);
+		
+		// the user's array must be at least as large as required
+		// first check the number of dimensions is sufficient
+		int ndims = 1;
+		if(NROW>1) ++ndims;
+		if(NAISLE>1) ++ndims;
+		if(ndims!=branchdims.size()){
+			std::cerr<<"passed an array reference of dimensionality "<<ndims
+					 <<" for branch "<<branchname<<" which has dimensionality "
+					 <<branchdims.size()<<std::endl;
+			return 0;
+		}
+		
+		// next check each dimension has sufficient capacity
+		bool cap_ok = true;
+		if(NCOL<branchdims.at(0)) cap_ok = false;
+		if(ndims>1 && NROW<branchdims.at(1)) cap_ok = false;
+		if(ndims>2 && NAISLE<branchdims.at(2)) cap_ok = false;
+		if(not cap_ok){
+			std::cerr<<"passed an array with dimensions ["<<NCOL<<"]";
+			if(NROW>1) std::cerr<<"["<<NROW<<"]";
+			if(NAISLE>1) std::cerr<<"["<<NAISLE<<"] ";
+			std::cerr<<" which is insufficient for the data dimensions ";
+			for(int i=0; i<ndims; ++i) std::cerr<<"["<<branchdims.at(i)<<"]";
+			std::cerr<<std::endl;
+			return 0;
+		}
+		
+		// copy the data to the user's array
+		int data_cols = branchdims.at(0);
+		int data_rows = (ndims>1) ? branchdims.at(1) : 1;
+		int data_aisles = (ndims>2) ? branchdims.at(2) : 1;
+		T* objp = reinterpret_cast<T*>(branch_value_pointers.at(branchname));
+		for(int aisle=0; aisle<NAISLE; ++aisle){
+			for(int row=0; row<NROW; ++row){
+				for(int col=0; col<NCOL; ++col){
+					std::size_t dest_flat_index = aisle*NCOL*NROW + row*NCOL + col;
+					std::size_t source_flat_index = aisle*data_rows*data_cols + row*data_cols + col;
+					if((col+1)>branchdims.at(0) ||
+					   (ndims>1 && (row+1)>branchdims.at(1)) ||
+					   (ndims>2 && (aisle+1)>branchdims.at(2))){
+						arr_in[dest_flat_index] = 0;
+					} else {
+						arr_in[dest_flat_index] = objp[source_flat_index];
+					}
+				}
+			}
+		}
+		return 1;
+	}
+	
+	// specialization for arrays using basic_array
 	template<typename T>
 	int GetBranchValue(std::string branchname, basic_array<T>& ref_in){
 		// check we know this branch
@@ -86,6 +181,22 @@ class MTreeReader {
 		// finally construct and return the wrapper
 		ref_in = basic_array<T>(branch_value_pointers.at(branchname),branchdims);
 		return 1;
+	}
+	
+	// aliases of GetBranchValue
+	template<typename T>
+	int Get(std::string branchname, const T* &pointer_in){
+		return GetBranchValue(branchname, pointer_in);
+	}
+	
+	template<typename T>
+	int Get(std::string branchname, T& ref_in){
+		return GetBranchValue(branchname, ref_in);
+	}
+	
+	template<typename T>
+	int Get(std::string branchname, basic_array<T>& ref_in){
+		return GetBranchValue(branchname, ref_in);
 	}
 	
 	// misc operations

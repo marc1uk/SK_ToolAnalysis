@@ -8,7 +8,7 @@ LOCAL_LIBS = -lRootStl -lthirdredvars
 LD_RUN_PATH=$(SKOFL_LIBDIR):$(A_LIBDIR)
 
 # C++ compiler flags - XXX config.gmk sets this already, so APPEND ONLY XXX
-CXXFLAGS    += -g -O3 -std=c++11 -fdiagnostics-color=always -Wno-reorder -Wno-sign-compare -Wno-unused-variable -Wno-unused-but-set-variable -Wl,--as-needed
+CXXFLAGS    += -g -O3 -std=c++11 -fdiagnostics-color=always -Wno-reorder -Wno-sign-compare -Wno-unused-variable -Wno-unused-but-set-variable -Wl,--as-needed -Werror=array-bounds
 #-D_GLIBCXX_DEBUG  << g++ debug mode. immediate segfault...
 
 # flags required for gprof profiling

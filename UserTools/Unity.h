@@ -13,3 +13,4 @@
 #include "FitLi9Lifetime.h"
 #include "FitPurewaterLi9NcaptureDt.h"
 #include "FitSpallationDt.h"
+#include "TreeReader.h"

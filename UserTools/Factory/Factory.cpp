@@ -20,6 +20,7 @@ if (tool=="PlotMuonDtDlt") ret=new PlotMuonDtDlt;
 if (tool=="FitLi9Lifetime") ret=new FitLi9Lifetime;
 if (tool=="FitPurewaterLi9NcaptureDt") ret=new FitPurewaterLi9NcaptureDt;
 if (tool=="FitSpallationDt") ret=new FitSpallationDt;
+if (tool=="TreeReader") ret=new TreeReader;
 return ret;
 }
 

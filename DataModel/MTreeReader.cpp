@@ -31,12 +31,15 @@ int MTreeReader::Load(std::string filename, std::string treename){
 	// determine if filename is an actual file or a pattern (TChain)
 	std::string pathtype;
 	bool pathexists = CheckPath(filename, pathtype);
+	int ok=1;
 	if(pathexists && pathtype=="f"){
 		// given a file: load it as normal
-		int ok = LoadFile(filename);
+		ok = LoadFile(filename);
 		if(not ok) return ok;
 		LoadTree(treename);
 		if(not ok) return ok;
+		ok = ParseBranches();
+		return ok;
 	} else if(pathexists && pathtype=="d"){
 		// given a directory: we can't work with just this
 		std::cerr<<"!!! MTreeReader constructor called with a path to a directory !!!"<<std::endl
@@ -72,7 +75,6 @@ int MTreeReader::Load(std::string filename, std::string treename){
 			}
 		}
 	}
-	int ok = ParseBranches();
 	return ok;
 }
 
