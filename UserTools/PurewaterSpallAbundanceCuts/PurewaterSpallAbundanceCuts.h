@@ -1,5 +1,5 @@
-#ifndef PurewaterLi9Rate_H
-#define PurewaterLi9Rate_H
+#ifndef PurewaterSpallAbundanceCuts_H
+#define PurewaterSpallAbundanceCuts_H
 
 #include <string>
 #include <iostream>
@@ -12,12 +12,8 @@
 #include "SkrootHeaders.h"    // MCInfo, Header etc.
 #include "thirdredvars.h"     // ThirdRed class
 
-class TSpline3;
-
-//#include "cut_third.h"
-
 /**
-* \class PurewaterLi9Rate
+* \class PurewaterSpallAbundanceCuts
 *
 * Measure rate of Li9 production by extracting the number of Li9 events following muons
 * Methods based on 2015 paper by Yang Zhang
@@ -27,11 +23,11 @@ class TSpline3;
 * Contact: marcus.o-flaherty@warwick.ac.uk
 */
 
-class PurewaterLi9Rate: public Tool {
+class PurewaterSpallAbundanceCuts: public Tool {
 	
 	public:
 	
-	PurewaterLi9Rate(); ///< Simple constructor
+	PurewaterSpallAbundanceCuts(); ///< Simple constructor
 	bool Initialise(std::string configfile,DataModel &data); ///< Initialise Function for setting up Tool resorces. @param configfile The path and name of the dynamic configuration file to read in. @param data A reference to the transient data class used to pass information between Tools.
 	bool Execute(); ///< Executre function used to perform Tool perpose.
 	bool Finalise(); ///< Finalise funciton used to clean up resorces.
@@ -40,18 +36,11 @@ class PurewaterLi9Rate: public Tool {
 	
 	// file IO stuff
 	// =============
-	std::string inputFile="";                                   // input file to read
-	MTreeReader myTreeReader;                                   // the TTree reader
+	std::string treeReaderName="";                              // name of MTreeReader for input
+	MTreeReader* myTreeReader;                                  // the TTree reader
 	MTreeSelection myTreeSelections;                            // record what passes what cuts
 	int entry_number=0;                                         // input TTree entry
-	int first_entry=0;                                          // first TTree entry to start from
-	int MAX_ENTRIES=-1;                                         // max num input TTree entries to process
 	std::string outputFile="li9_cuts.root";                     // output file to write
-	
-	// these are unused
-	TFile* outfile=nullptr;                                     // the output TFile
-	TTree* outtree=nullptr;                                     // the output TTree
-	int WRITE_FREQUENCY=10;                                     // update output tree every N fills
 	
 	// cut configurations
 	// ==================
@@ -60,13 +49,12 @@ class PurewaterLi9Rate: public Tool {
 	float max_closest_muon_dt=0.001;  // 1ms
 	float max_closest_lowe_dx=490;    // 490cm
 	float ntag_FOM_threshold=0.95;    // BDT FOM threshold for Li9 ntagging
-	float li9_lifetime_dtmin;         // range of dt_mu_lowe values to accept
-	float li9_lifetime_dtmax;         // for Li9 candidates, [us]
-	// ROC curve reading for ntag
-//	TSpline3 *sig=nullptr;       // TODO for BDT efficiency
-//	TSpline3 *sigsys=nullptr;    // TODO for BDT efficiency
-//	TSpline3 *bg=nullptr;        // TODO for BDT efficiency
-//	TSpline3 *bgsys=nullptr;     // TODO for BDT efficiency
+	
+	// functions
+	// =========
+	int GetBranchVariables();    // retrieve tree branches
+	bool Analyse();              // main body
+	bool apply_third_reduction(const ThirdRed *th, const LoweInfo *LOWE);
 	
 	// variables to read in
 	// ====================
@@ -95,7 +83,7 @@ class PurewaterLi9Rate: public Tool {
 	basic_array<float*> dlt_mu_lowe;                 // transverse distance between muon and lowe event [cm]
 //	basic_array<float*> spadll;                      // longitudinal distance between muon and lowe event [cm]
 //	basic_array<float*> spadll_kirk;                 // version based on...?
-//	basic_array<float*> sparesq;                     // surplus charge over that of a MIP with reco track length
+//	basic_array<float*> sparesq;                     // surplus charge over a MIP with reco track length
 //	basic_array<float*> spaqpeak;                    // ? 
 //	basic_array<float*> spaqpeak_kirk;               // version based on...?
 //	basic_array<float*> spamuqismsk;                 // ?
@@ -109,48 +97,14 @@ class PurewaterLi9Rate: public Tool {
 //	basic_array<float*> neutdiff;                    // ?
 	basic_array<float*> closest_lowe_60s;            // closest distance to another lowe event within 60s??
 	
-	// variables to write out
+	// crude livetime tracker
 	// ======================
 	struct tm runstart = {0};
 	struct tm runend = {0};
 	int current_run=0;
 	double livetime=0;
-	// output is handled by the MTreeSelection
-	
-	// calculation variables
-	// =====================
-	// varying BDT FOM thresholds
-	std::string bdt_outfile;
-	int num_bdt_cut_bins;
-	float bdt_cut_min, bdt_cut_max;
-	std::vector<float> bdt_cut_thresholds;
-	int nspatot=0; // sonia's count of li9 candidates before ntag
-	std::vector<float> dtimes_li9_ncap;  // sonia's li9 ncapture times
-	
-	std::vector<float> spall_lifetimes;
-	
-	// functions
-	// =========
-	// input
-	int DisableUnusedBranches();                                // disable unused branches to speed up reading input
-	int ReadEntryNtuple(long entry_number);                     // get next entry from TreeReader
-	
-	// output - these are currently redundant, output is handled by the MTreeSelection
-	int CreateOutputFile(std::string outputFile);               // create output TFile and TTree
-	int FillTree();                                             // fill output TTree entries
-	void ClearOutputTreeBranches();                             // reset containers to prevent carry-over
-	int WriteTree();                                            // update output TFile
-	void CloseFile();                                           // close output TFile
-	
-	// other
-	void fill_ntag_roc(TSpline3 **sig, TSpline3 **bg, TSpline3 **sigsys, TSpline3 **bgsys);
-	void make_BDT_bins();
-	bool apply_third_reduction(const ThirdRed *th, const LoweInfo *LOWE);
-	bool Analyse();        // main body
-	bool SoniasAnalyse();  // translation of sonia's set of cuts
+	void IncrementLivetime();
 	void AddLastRunTime();
-	
-	//void PrintBranches();                                     // print an output event, for debug
 	
 	// standard tool stuff
 	// ===================
@@ -164,14 +118,6 @@ class PurewaterLi9Rate: public Tool {
 	std::string logmessage="";
 	int get_ok=0;
 	
-	// for testing performance
-	bool stopping=false;
-	uint64_t num_processed_events=0;
-	std::chrono::high_resolution_clock::time_point toolchain_start;
-	std::chrono::high_resolution_clock::time_point toolchain_end;
-	double loop_times[1000];
-	double analyse_times[1000];
-	int loop_i=0;
 };
 
 
