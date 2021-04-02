@@ -4,6 +4,8 @@
 #include "Algorithms.h"
 #include "Constants.h"
 #include "type_name_as_string.h"
+#include "MTreeReader.h"
+#include "MTreeSelection.h"
 
 #include "TROOT.h"
 #include "TFile.h"
@@ -42,6 +44,8 @@ const std::map<std::string,double> lifetimes{  // from 2015 paper, seconds
 	{"12N",0.016},
 	{"13O",0.013},
 	{"11Li",0.012},
+	{"8He_9C",0.175},
+	{"8Li_8B",1.16},
 	{"ncapture",204.8E-6}
 };
 
@@ -99,19 +103,34 @@ bool FitSpallationDt::Initialise(std::string configfile, DataModel &data){
 	
 	// Get the Tool configuration variables
 	// ------------------------------------
-	m_variables.Get("verbosity",verbosity);            // how verbose to be
-	m_variables.Get("outputFile",outputFile);          // where to save data. If empty, current TFile
+	m_variables.Get("verbosity",verbosity);              // how verbose to be
+	m_variables.Get("outputFile",outputFile);            // where to save data. If empty, current TFile
 	// hacky way to scale the total number of events when comparing to the paper plots
-	m_variables.Get("paper_scaling",paper_scaling);
+	m_variables.Get("paper_scaling",paper_scaling);      // overall scaling factor of paper
+	m_variables.Get("livetime",livetime);                // for when we don't have it from upstream
 	
-	// normally this Tool obtains its data from PurewaterLi9Plots, which fills the vector
-	// of spallation muon to lowe event time differences (dt_mu_lowe_vals)
-	// and places a pointer to it in the CStore. However we also support filling that
-	// vector from spallation files directly
-	m_variables.Get("inputFile",inputFile);            // input spallation files for dt values
-	m_variables.Get("treeName",treeName);              // name of input tree in spallation files
-	m_variables.Get("maxEvents",maxEvents);            // user limit to number of events to process
-	m_variables.Get("livetime",livetime);              // if not provided by upstream tool
+	// this tool may build its own dataset with an upstream ROOT file reader
+	m_variables.Get("treeReaderName",treeReaderName);    // reader when getting entries from an upstream source
+	// or we can shortcut it by dumping the dataset to a BoostStore and then retrieving in one go.
+	m_variables.Get("valuesFileMode",valuesFileMode);    // if not provided by upstream tool
+	m_variables.Get("valuesFile",valuesFile);            // if not provided by upstream tool
+	
+	// for when we're reading files without pre-selection
+	m_variables.Get("run_min",run_min);                  // debug, for when we're loading the dt data directly
+	m_variables.Get("run_max",run_max);                  // debug, for when we're loading the dt data directly
+	
+	// various alterations on the fit process while we try to find the source of our discrepancy
+	// against previous versions of this study
+	m_variables.Get("useHack",useHack);                  // constrain abundances to at least half paper vals
+	m_variables.Get("n_dt_bins",n_dt_bins);              // num bins in the dt histogram
+	m_variables.Get("binning_type",binning_type);        // '0 = logarithmic' or '1 = linear'
+	m_variables.Get("random_subtract",random_subtract);  // subtract pre-mu dt dist from post-mu dt dist before fitting
+	m_variables.Get("laurasfile",laurasfile);            // file with lauras dt histogram to fit
+	m_variables.Get("use_par_limits",use_par_limits);    // whether to limit isotope abundances to >0 (and <1E7)
+	m_variables.Get("fix_const",fix_const);              // whether to include a constant term in the fitting
+	m_variables.Get("split_iso_pairs",split_iso_pairs);  // whether to split pairs (e.g. 8Be_8Li) into
+	// two expontial terms with a shared amplitude, i.e. (A/2)*{exp(-t/t1)+exp(-t/t2)}
+	// or combine them into one term with an average lifetime, i.e. A*(exp(-t/{(t1+t2)*0.5}))
 	
 	// energy threshold efficiencies, from FLUKA
 	m_variables.Get("efficienciesFile",efficienciesFile);
@@ -119,18 +138,10 @@ bool FitSpallationDt::Initialise(std::string configfile, DataModel &data){
 	// read efficiencies of the different thresholds of old vs new data
 	GetEnergyCutEfficiencies();
 	
-	// quick hack to load data from spallation files by laura for validation
-	if(inputFile!=""){
-		get_ok = myTreeReader.Load(inputFile, treeName);
-		if(not get_ok){
-			Log(toolName+" failed to open reader on tree "+treeName+" in file "+inputFile,v_error,verbosity);
-			return false;
-		}
-		DisableUnusedBranches();  // for efficiency of reading, only enable used branches
-		
-		// normally populated by upstream tools
-		m_data->CStore.Set("livetime",livetime);
-		m_data->CStore.Set("dt_mu_lowe_vals",&my_dt_mu_lowe_vals);
+	// if we're loading data with an upstream ROOT file reader, retrieve the reader
+	if(valuesFileMode!="read"){
+		myTreeReader = m_data->Trees.at(treeReaderName);
+		myTreeSelections = m_data->Selectors.at(treeReaderName);
 	}
 	
 	return true;
@@ -139,89 +150,107 @@ bool FitSpallationDt::Initialise(std::string configfile, DataModel &data){
 
 bool FitSpallationDt::Execute(){
 	
-	Log(toolName+" getting entry "+toString(entrynum),v_debug,verbosity);
-	
-	// retrieve desired branches
-	get_ok = GetBranches();
-	
-	// process the data
-	try{
-		Analyse();
-	}
-	catch(std::exception& e){
-		// catch any exceptions to ensure we always increment the event number
-		// and load the next entry. This prevents us getting stuck in a loop
-		// forever processing the same broken entry!
-		Log(toolName+" encountered error "+e.what()+" during Analyse()",v_error,verbosity);
-	}
-	
-	// move to next entry
-	entrynum++;
-	// check if we've hit the user-requested entry limit
-	if((maxEvents>0)&&(entrynum==maxEvents)){
-		Log(toolName+" hit max events, setting StopLoop",v_error,verbosity);
+	// if retrieving a previously built dataset from a BoostStore, we can skip the Execute loop
+	if(valuesFileMode=="read"){
 		m_data->vars.Set("StopLoop",1);
-		return 1;
+		return true;
 	}
 	
-	// pre-load the next ttree entry
-	get_ok = ReadEntry(entrynum);
-	if(get_ok==0){
-		return 1; // end of file
-	} else if (get_ok<0){
-		return 0; // read error
+	// this tool supports two types of upstream input file
+	// the normal analysis using the 2020 spallation dataset directly
+	if(myTreeSelections!=nullptr){
+		Analyse();
+	} else {
+		// or, as part of debugging, files from laura's processing script
+		Analyse_Laura();
 	}
 	
 	return true;
 }
 
 bool FitSpallationDt::Analyse(){
-	// we do our analysis (fitting the distribution) in finalise
-	// all we need to do here is add the next dt value
-	my_dt_mu_lowe_vals.push_back(dt);
+	// retrieve desired branches
+	get_ok = GetBranchValues();
+	
+	// the following cuts are based on muon-lowe pair variables, so loop over muon-lowe pairs
+	std::set<size_t> spall_mu_indices = myTreeSelections->GetPassingIndexes("dlt_mu_lowe>200cm");
+	Log(toolName+" Looping over "+toString(spall_mu_indices.size())
+				+" preceding muons to look for spallation events",v_debug,verbosity);
+	for(size_t mu_i : spall_mu_indices){
+		// record the distribution of dt_mu_lowe
+		Log(toolName+" filling mu->lowe dt distribution for spallation entries",v_debug+2,verbosity);
+		// this *should* only contain pre muons with dt < 0:
+		if(dt_mu_lowe[mu_i]>0){
+			Log(toolName+" error! Spallation muon with time "+toString(dt_mu_lowe[mu_i])+" after lowe event!",
+				v_warning,verbosity);
+			continue;
+		}
+		dt_mu_lowe_vals.push_back(dt_mu_lowe[mu_i]);  // FIXME weight by num_pre_muons
+	}
 	return true;
 }
 
-int FitSpallationDt::ReadEntry(long entry_number){
-	// load next entry data from TTree
-	int bytesread = myTreeReader.GetEntry(entry_number);
+bool FitSpallationDt::Analyse_Laura(){
+	// retrieve desired branches
+	get_ok = GetBranchValuesLaura();
 	
-	// stop loop if we ran off the end of the tree
-	if(bytesread==0){
-		Log(toolName+" hit end of input file, stopping loop",v_message,verbosity);
-		m_data->vars.Set("StopLoop",1);
-	}
-	// stop loop if we had an error of some kind
-	else if(bytesread<0){
-		 if(bytesread==-1) Log(toolName+" IO error loading next input entry!",v_error,verbosity);
-		 if(bytesread==-2) Log(toolName+" AutoClear error loading next input entry!",v_error,verbosity);
-		 if(bytesread <-2) Log(toolName+" Unknown error "+toString(bytesread)
-		                       +" loading next input entry!",v_error,verbosity);
-		 m_data->vars.Set("StopLoop",1);
-	}
-	
-	return bytesread;
+	// ensure selections are aligned with our analysis for comparison
+//	if(dt<-60) return true;
+//	if(bsgood_relic<0.5) return true;
+//	if(energy_relic<8) return true;
+//	if(lt>200) return true;
+//	if(muboy_status!=1) return true;
+	if((nrunsk<run_min) || (nrunsk>run_max)) return true;
+	dt_mu_lowe_vals.push_back(dt);
+	return true;
 }
 
-int FitSpallationDt::GetBranches(){
-	int success = (
-		(myTreeReader.GetBranchValue("dt",dt))
+bool FitSpallationDt::GetBranchValues(){
+	bool success = (
+		(myTreeReader->Get("spadt",dt_mu_lowe))
 	);
 	return success;
 }
 
-int FitSpallationDt::DisableUnusedBranches(){
-	std::vector<std::string> used_branches{
-		// list used branches here
-		"dt"
-	};
-	return myTreeReader.OnlyEnableBranches(used_branches);
+bool FitSpallationDt::GetBranchValuesLaura(){
+	bool success = (
+		(myTreeReader->Get("muboy_status",muboy_status)) &&   // for paper version of lt cut
+		(myTreeReader->Get("lt",lt)) &&
+		(myTreeReader->Get("energy_relic",energy_relic)) &&
+		(myTreeReader->Get("bsgood_relic",bsgood_relic)) &&
+		(myTreeReader->Get("nrunsk",nrunsk)) &&
+		(myTreeReader->Get("dt",dt))
+	);
+	return success;
 }
-
 
 bool FitSpallationDt::Finalise(){
 	
-	// make a new file if given a filename, or if blank check there is a valid file open
+	// if we want to shortcut the file read loop and go straight to finalise,
+	// dump any necessary variables to an output file now. Or, if we're skipping
+	// the file loop, read that file in now.
+	if(valuesFileMode=="write"){
+		// set all the values into the BoostStore
+		BoostStore valueStore(true,constants::BOOST_STORE_BINARY_FORMAT);
+		valueStore.Set("livetime",livetime);
+		valueStore.Set("dt_mu_lowe_vals",dt_mu_lowe_vals);
+		// save BoostStore
+		valueStore.Save(valuesFile.c_str());
+		valueStore.Close(); // necessary to complete the file write!
+	} else if(valuesFileMode=="read"){
+		BoostStore valueStore(true,constants::BOOST_STORE_BINARY_FORMAT);
+		valueStore.Initialise(valuesFile.c_str());
+		valueStore.Get("dt_mu_lowe_vals",dt_mu_lowe_vals);
+		valueStore.Get("livetime",livetime);
+	} else {
+		// get any remaining variables from upstream tools
+		get_ok = m_data->CStore.Get("livetime",livetime);
+	}
+	
+	Log(toolName+"fitting "+toString(dt_mu_lowe_vals.size())+" spallation dt values",v_debug,verbosity);
+	
+	// make a new output file for fit results if given a filename
+	// or if no file name is given, check there is a valid ROOT file open, and if so we'll write to it
 	TFile* fout = nullptr;
 	if(outputFile!=""){
 		fout = new TFile(outputFile.c_str(),"RECREATE");
@@ -233,6 +262,7 @@ bool FitSpallationDt::Finalise(){
 		}
 	}
 	
+	// Fit the data, extract the abundances
 	Log(toolName+" Fitting spallation dt distribution",v_debug,verbosity);
 	PlotSpallationDt();
 	
@@ -249,79 +279,116 @@ bool FitSpallationDt::Finalise(){
 // =====================================================================
 
 bool FitSpallationDt::PlotSpallationDt(){
-	
-	// get the data from the CStore
-	std::vector<float>* dt_mu_lowe_vals; // input data
-	get_ok = m_data->CStore.Get("dt_mu_lowe_vals",dt_mu_lowe_vals);
-	if(not get_ok){
-		Log(toolName+" Error! No dt_mu_lowe_vals in CStore!",v_error,verbosity);
-		return true;
-	}
-	std::cout<<"fitting "<<dt_mu_lowe_vals->size()<<" spallation dt values"<<std::endl;
-	
-	// we also need the livetime to convert number of events to rates
-	get_ok = m_data->CStore.Get("livetime",livetime);
-	if(not get_ok){
-		Log(toolName+" Error! No livetime in CStore!",v_error,verbosity);
-		return true;
-	}
-	livetime = paper_livetime; // XXX XXX REMOVE WHEN IMPLEMENTED
+	/* Main driver function for this analysis. This function fits the distribution of
+	   spallation muon to low-e event time differences, using several intermediate fits
+	   to obtain initial values, before one final fit with everything floating.
+	   The data is fit with a sum of exponentials, one for each contributing spallation isotope.
+	   The number of events from each isotope is extracted from the fit and converted
+	   (by accounting for livetime, fiducial volume, and selection efficiency)
+	   into rate of production of that spallation isotope.
+	*/
 	
 	// dt distribution of muons passing dlt<200cm cut
-	TH1F dt_mu_lowe_hist("dt_mu_lowe_hist","Spallation Muon to Low-E Time Differences",5000,0,30);
+	// first a version using linear binning, both for spallation candidates (mu-lowe dt<0)
+	// and random events (mu-lowe dt>0)
+	// 5000 bins (30/0.006) gives chi2/NDOF that matches the 2015 paper.
+	int nbins = n_dt_bins;
+	binwidth=30./nbins;
+	TH1F dt_mu_lowe_hist("dt_mu_lowe_hist","Spallation Muon to Low-E Time Differences",nbins,0,30);
 	TH1F dt_mu_lowe_hist_short("dt_mu_lowe_hist_short","Spallation Muon to Low-E Time Differences",500,0,0.25);
-	for(auto&& aval : (*dt_mu_lowe_vals)){
-		if(aval>0) continue;  // only fit preceding muons (true spallation)
-		dt_mu_lowe_hist.Fill(fabs(aval));
-		dt_mu_lowe_hist_short.Fill(fabs(aval));
+	TH1F dt_mu_lowe_rand_hist("dt_mu_lowe_rand_hist","Random Muon to Low-E Time Differences",nbins,0,30);
+	for(auto&& aval : dt_mu_lowe_vals){
+		if(aval>0){
+			dt_mu_lowe_rand_hist.Fill(aval);
+		} else {
+			dt_mu_lowe_hist.Fill(fabs(aval));
+			dt_mu_lowe_hist_short.Fill(fabs(aval));
+		}
 	}
 	dt_mu_lowe_hist.Write();
 	dt_mu_lowe_hist_short.Write();
+	dt_mu_lowe_rand_hist.Write();
 	
-	// make a histo with equally spaced bins in log scale
-	// we need to fit the same histogram (with the same binning) for the intermediate fits,
-	// otherwise the bin widths change, the contents change, and the fit parameters aren't the same.
-	// 5000 bins (30/0.006) gives chi2/NDOF that matches the paper.
-	int nbins=5000;
+	// we can either fit with a constant term to account for (dt-independent) random contamination,
+	// or subtract the distribution of random candidates from the spallation candidates
+	TH1F* dt_mu_lowe_hist_randsub = (TH1F*)dt_mu_lowe_hist.Clone("dt_mu_lowe_hist_randsub");
+	dt_mu_lowe_hist_randsub->Add(&dt_mu_lowe_rand_hist,-1);
+	
+	// alternative versions of the above with equally spaced bins on a log scale
+	// we need to fit the same histogram (with the same binning) for all the intermediate fits,
+	// otherwise the bin widths change, the contents change, and the fit parameters change.
+	// We can only really achieve suitable binning across the whole dt range with logarithmic binning.
 	std::vector<double> binedges = MakeLogBins(0.001, 30, nbins+1);
 	TH1F dt_mu_lowe_hist_log("dt_mu_lowe_hist_log","Data;dt(s);Events/0.006 s",
 							 nbins, binedges.data());
-	for(auto&& aval : (*dt_mu_lowe_vals)){ if(aval>0) continue; dt_mu_lowe_hist_log.Fill(fabs(aval)); }
-	// scale each bin by its width to correct back to number of events per equal time interval
+	TH1F dt_mu_lowe_rand_hist_log("dt_mu_lowe_rand_hist_log","Data;dt(s);Events/0.006 s",
+							 nbins, binedges.data());
+	for(auto&& aval : dt_mu_lowe_vals){
+		if(aval>0) dt_mu_lowe_rand_hist_log.Fill(aval);
+		else       dt_mu_lowe_hist_log.Fill(fabs(aval));
+	}
+	// Since we used different bin widths, to have a consistent y axis
+	// (events per fixed time interval) we need to scale each bin's contents by its bin width
 	for(int bini=1; bini<dt_mu_lowe_hist_log.GetNbinsX()+1; ++bini){
-		// numbers here are from binning of dt_mu_lowe_hist
+		dt_mu_lowe_rand_hist_log.SetBinContent(bini,
+			dt_mu_lowe_rand_hist_log.GetBinContent(bini)/dt_mu_lowe_rand_hist_log.GetBinWidth(bini));
 		dt_mu_lowe_hist_log.SetBinContent(bini,
 			dt_mu_lowe_hist_log.GetBinContent(bini)/dt_mu_lowe_hist_log.GetBinWidth(bini));
 	}
-	// for some ungodly reason they plot things in events / 0.006s
-	// so scale down by events / second to events / 0.006s by * 0.006s
-	dt_mu_lowe_hist_log.Scale(0.006);
+	// for some reason the 2015 paper plots things in events per 0.006s,
+	// rather than events per second, even though our x-axis is in units of seconds!
+	// To match it, scale our y-axis (which is in units of events per second) by *0.006s
+	dt_mu_lowe_hist_log.Scale(30./nbins);
+	dt_mu_lowe_rand_hist_log.Scale(30./nbins);
+	
+	// random-subtracted log-binned histogram
+	TH1F* dt_mu_lowe_hist_log_randsub = (TH1F*)dt_mu_lowe_hist_log.Clone("dt_mu_lowe_hist_log_randsub");
+	dt_mu_lowe_hist_log_randsub->Add(&dt_mu_lowe_rand_hist_log,-1);
+	
+	// select which histogram to fit here:
+	TH1* the_hist_to_fit = nullptr;
+	if(binning_type==0){                                                    // log binned
+		if(random_subtract) the_hist_to_fit = dt_mu_lowe_hist_log_randsub;  // random subtracted
+		else the_hist_to_fit = &dt_mu_lowe_hist_log;                        // not random subtracted
+	} else {                                                                // linear binned
+		if(random_subtract) the_hist_to_fit = dt_mu_lowe_hist_randsub;      // random subtracted
+		else the_hist_to_fit = &dt_mu_lowe_hist;                            // not random subtracted
+	}
+	// one further debug option: fit the histogram of dt values from laura's script directly
+	if(laurasfile!=""){
+		// pull laura's histogram from her file
+		auto current_dir = gDirectory;
+		TFile* f = TFile::Open(laurasfile.c_str());
+		f->cd();
+		TDirectoryFile* spal1 = (TDirectoryFile*)f->Get("spal1");
+		spal1->cd();
+		the_hist_to_fit = (TH1D*)gDirectory->Get("data_dt-random1_dt");
+		Log(toolName+": Fitting dt histogram from file "+laurasfile,v_error,verbosity);
+		current_dir->cd();
+	}
+	
 //	std::cout<<"this plot will be used for all the time distribution fits:"<<std::endl;
-//	dt_mu_lowe_hist_log.Draw();
+//	the_hist_to_fit->Draw();
 //	gPad->WaitPrimitive();
 	
-	// fit this with all the rates....
+	// Now we have our histogram, fit it!
 	// we do the fitting in 5 stages, initially fitting sub-ranges of the distribution
-	for(int i=0; i<5; ++i) FitDtDistribution(dt_mu_lowe_hist, dt_mu_lowe_hist_log, i);
-	
-	// the yield across the whole energy range is obtained from the fit amplitude via:
-	// Yi = Ni / (Rmu * T * rho * Lmu)
-	// where Rmu is the muon rate, T the live time, rho the density of water and Lmu the
-	// measured path length of the muon track...? is this event-wise? Yield... maybe.
+	for(int i=0; i<5; ++i) FitDtDistribution(*the_hist_to_fit, i);
 	
 	// the production rate integrated over the whole energy range is given by:
 	// Ri = Ni / (FV * T * eff_i)
-	// where FV is the fid vol and T again live time.
-	// note this is using the paper definiton, not zhangs definition. just changes defn of Ni<->Ni*eff_i
+	// where FV is the fid vol, T is the live time, and eff_i is the total efficiency
+	// of the reduction cuts for retaining events from isotope i.
+	// (note this is using the paper definiton, not zhangs definition. just changes defn of Ni<->Ni*eff_i)
 	std::map<std::string,double> rates;
 	for(auto&& anisotope : fit_amps){
 		std::string isotope = anisotope.first;
 		if(isotope.substr(0,5)=="const") continue;
 		// we need to know the efficiency of the selection, which is obtained
-		// from the fraction of beta spectrum that's below 6MeV
+		// from the fraction of beta spectrum that's below 8MeV
 		if(isotope.find("_")==std::string::npos){
 			double energy_cut_eff = reco_effs_8mev.at(anisotope.first)/100.;
-			// FIXME for now just assume the same 1st reduction and dlt cut efficiency
+			// FIXME for now just assume the same 1st reduction and dlt cut efficiency as 2015 paper
 			double efficiency = energy_cut_eff * (paper_first_reduction_eff/100.) * (paper_dlt_cut_eff/100.);
 			rates[anisotope.first] = anisotope.second/(efficiency * fiducial_vol * livetime);
 			std::cout<<"Num of "<<anisotope.first<<" events is "<<anisotope.second
@@ -332,7 +399,7 @@ bool FitSpallationDt::PlotSpallationDt(){
 			std::string second_isotope = isotope.substr(isotope.find_first_of("_")+1,std::string::npos);
 			double e_cut_eff_1 = reco_effs_8mev.at(first_isotope)/100.;
 			double e_cut_eff_2 = reco_effs_8mev.at(second_isotope)/100.;
-			// FIXME for now just assume the same 1st reduction and dlt cut efficiency
+			// FIXME for now just assume the same 1st reduction and dlt cut efficiency as 2015 paper
 			double first_efficiency = e_cut_eff_1 * (paper_first_reduction_eff/100.) * (paper_dlt_cut_eff/100.);
 			double second_efficiency = e_cut_eff_2 * (paper_first_reduction_eff/100.) * (paper_dlt_cut_eff/100.);
 			rates[first_isotope] = 0.5*anisotope.second/(first_efficiency * fiducial_vol * livetime);
@@ -347,6 +414,12 @@ bool FitSpallationDt::PlotSpallationDt(){
 	}
 	// TODO save this map to an ouput file
 	// not worth doing till we re-run and determine the livetime
+	
+	// the yield across the whole energy range is obtained from the fit amplitude via:
+	// Yi = Ni / (Rmu * T * rho * Lmu)
+	// where Rmu is the muon rate, T the live time, rho the density of water and Lmu the
+	// measured path length of the muon track...? is this event-wise?
+	
 	return true;
 }
 
@@ -361,83 +434,122 @@ std::vector<double> FitSpallationDt::MakeLogBins(double xmin, double xmax, int n
 	return binedges;
 }
 
-bool FitSpallationDt::FitDtDistribution(TH1F& dt_mu_lowe_hist, TH1F& dt_mu_lowe_hist_log, int rangenum){
-	// do sub-range fitting based on section B of the 2015 paper
-	// formula 1 from the paper, with a sub-range as described in section B2
-	// we have 4 sub-ranges to fit
+bool FitSpallationDt::FitDtDistribution(TH1& dt_mu_lowe_hist, int rangenum){
+	/* Do dt fitting based on section B of the 2015 paper.
+	   As described in section B2, we do 4 fits to subsets of the time range,
+	   making note of the fit results as we go, then one final fit to the complete time range
+	   using our previous results as a starting point for each isotope's abundance.
+	*/
+	
 	switch (rangenum){
 	case 0:{
 		// fit range 50us -> 0.1s with 12B + 12N only
 		// make the function which we'll fit
-		std::cout<<"calling BuildFunction for case "<<rangenum<<", 12B+12N"<<std::endl;
+		Log(toolName+"calling BuildFunction for time range case "+toString(rangenum)
+			+", 12B+12N",v_debug,verbosity);
 		TF1 func_sum = BuildFunction({"12B","12N"},50e-6,0.1);
 		// do the fit
-		std::cout<<"fitting"<<std::endl;
-		dt_mu_lowe_hist_log.Fit(&func_sum,"R","",50e-6,0.1);
+		Log(toolName+" doing case "+toString(rangenum)+" fit",v_debug,verbosity);
+		std::string fitopt = (verbosity>2) ? "Rq" : "R";
+		dt_mu_lowe_hist.Fit(&func_sum,fitopt.c_str(),"",50e-6,0.1);
 		// record the results for the next step
-		std::cout<<"recording fit results"<<std::endl;
+		Log(toolName+" recording results from case "+toString(rangenum)+" fit",v_debug,verbosity);
 		PushFitAmp(func_sum,"12B");
 		PushFitAmp(func_sum,"12N");
 		fit_amps["const_0"] = func_sum.GetParameter("const");
-		std::cout<<"recorded results were: "<<std::endl
-				 <<"12B: "<<fit_amps["12B"]<<std::endl
-				 <<"12N: "<<fit_amps["12N"]<<std::endl
-				 <<"const_0: "<<fit_amps["const_0"]<<std::endl;
-		dt_mu_lowe_hist_log.Draw();
-		//gPad->WaitPrimitive();
-		dt_mu_lowe_hist_log.GetListOfFunctions()->Clear();
+		if(verbosity){
+			std::cout<<"recorded results were: "<<std::endl
+					 <<"12B: "<<fit_amps["12B"]<<std::endl
+					 <<"12N: "<<fit_amps["12N"]<<std::endl
+					 <<"const_0: "<<fit_amps["const_0"]<<std::endl;
+		}
+		
+		// draw the fit, if we want to check it
+		/*
+		dt_mu_lowe_hist.Draw();
+		gPad->WaitPrimitive();
+		*/
+		
+		// remove this intermediate fit from the list of functions
+		// associated with our dt distribution, since we no longer need it
+		dt_mu_lowe_hist.GetListOfFunctions()->Clear();
+		
 		break;
 		}
 	case 1:{
 		// fit range 6-30s with 16N + 11B only
-		std::cout<<"calling BuildFunction for case "<<rangenum<<", 16N+11Be"<<std::endl;
+		Log(toolName+"calling BuildFunction for time range case "+toString(rangenum)
+			+", 16N+11Be",v_debug,verbosity);
 		TF1 func_sum = BuildFunction({"16N","11Be"},6,30);
-		std::cout<<"fitting"<<std::endl;
-		dt_mu_lowe_hist_log.Fit(&func_sum,"R","",6,30);
+		Log(toolName+" doing case "+toString(rangenum)+" fit",v_debug,verbosity);
+		std::string fitopt = (verbosity>2) ? "Rq" : "R";
+		dt_mu_lowe_hist.Fit(&func_sum,fitopt.c_str(),"",6,30);
 		// record the results for the next step
-		std::cout<<"recording the fit results"<<std::endl;
+		Log(toolName+" recording results from case "+toString(rangenum)+" fit",v_debug,verbosity);
 		PushFitAmp(func_sum,"16N");
 		PushFitAmp(func_sum,"11Be");
 		fit_amps["const_1"] = func_sum.GetParameter("const");
-		std::cout<<"recorded results were: "<<std::endl
-				 <<"16N: "<<fit_amps["16N"]<<std::endl
-				 <<"11Be: "<<fit_amps["11Be"]<<std::endl
-				 <<"const_1: "<<fit_amps["const_1"]<<std::endl;
-		dt_mu_lowe_hist_log.Draw();
-		//gPad->WaitPrimitive();
-		dt_mu_lowe_hist_log.GetListOfFunctions()->Clear();
+		if(verbosity){
+			std::cout<<"recorded results were: "<<std::endl
+					 <<"16N: "<<fit_amps["16N"]<<std::endl
+					 <<"11Be: "<<fit_amps["11Be"]<<std::endl
+					 <<"const_1: "<<fit_amps["const_1"]<<std::endl;
+		}
+		
+		// draw the fit, if we want to check it
+		/*
+		dt_mu_lowe_hist.Draw();
+		gPad->WaitPrimitive();
+		*/
+		
+		// remove this intermediate fit from the list of functions
+		// associated with our dt distribution, since we no longer need it
+		dt_mu_lowe_hist.GetListOfFunctions()->Clear();
+		
 		break;
 		}
 	case 2:{
 		// fit the range 0.1-0.8s with the components previously fit now fixed,
 		// allowing additional components Li9 + a combination of 8He+9C
-		std::cout<<"calling BuildFunction for case "<<rangenum<<", 9Li+8He_9C+8Li_8B+12B+12N+16N+11Be"<<std::endl;
+		Log(toolName+"calling BuildFunction for time range case "+toString(rangenum)
+			+", 9Li+8He_9C+8Li_8B+12B+12N+16N+11Be",v_debug,verbosity);
 		TF1 func_sum = BuildFunction({"9Li","8He_9C","8Li_8B","12B","12N","16N","11Be"},0.1,0.8);
-		std::cout<<"retrieving past results"<<std::endl;
+		Log(toolName+" retrieving results from past fits in case "+toString(rangenum)+" fit",v_debug,verbosity);
 		// pull fit results from the last two stages
 		PullFitAmp(func_sum,"12B");
 		PullFitAmp(func_sum,"12N");
 		PullFitAmp(func_sum,"16N");
 		PullFitAmp(func_sum,"11Be");
 		// fit the new components
-		std::cout<<"fitting"<<std::endl;
-		dt_mu_lowe_hist_log.Fit(&func_sum,"R","",0.1,0.8);
+		Log(toolName+" doing case "+toString(rangenum)+" fit",v_debug,verbosity);
+		std::string fitopt = (verbosity>2) ? "Rq" : "R";
+		dt_mu_lowe_hist.Fit(&func_sum,fitopt.c_str(),"",0.1,0.8);
 		// record the results for the next step
-		std::cout<<"recording the fit results"<<std::endl;
+		Log(toolName+" recording results from case "+toString(rangenum)+" fit",v_debug,verbosity);
 		PushFitAmp(func_sum,"9Li");
 		PushFitAmp(func_sum,"8He_9C");
 		PushFitAmp(func_sum,"8Li_8B");
 		fit_amps["const_2"] = func_sum.GetParameter("const");
-		std::cout<<"recorded results were: "<<std::endl
-				 <<"9Li: "<<fit_amps["9Li"]<<std::endl
-				 <<"8He_9C: "<<fit_amps["8He_9C"]<<std::endl
-				 <<"8Li_8B: "<<fit_amps["8Li_8B"]<<std::endl
-				 <<"const_2: "<<fit_amps["const_2"]<<std::endl;
-		dt_mu_lowe_hist_log.Draw();
-		//gPad->WaitPrimitive();
-		dt_mu_lowe_hist_log.GetListOfFunctions()->Clear();
+		if(verbosity){
+			std::cout<<"recorded results were: "<<std::endl
+					 <<"9Li: "<<fit_amps["9Li"]<<std::endl
+					 <<"8He_9C: "<<fit_amps["8He_9C"]<<std::endl
+					 <<"8Li_8B: "<<fit_amps["8Li_8B"]<<std::endl
+					 <<"const_2: "<<fit_amps["const_2"]<<std::endl;
+		}
 		
-		// debug check, let's see what's going on here
+		// draw the fit, if we want to check it
+		/*
+		dt_mu_lowe_hist.Draw();
+		gPad->WaitPrimitive();
+		*/
+		
+		// remove this intermediate fit from the list of functions
+		// associated with our dt distribution, since we no longer need it
+		dt_mu_lowe_hist.GetListOfFunctions()->Clear();
+		
+		/*
+		// debug check
 		std::cout<<"Drawing past fits and this one, to see how they look"<<std::endl;
 		TF1 func_early = BuildFunction({"12B","12N"},50E-6,30);
 		// pull fit results from the last two stages
@@ -464,40 +576,72 @@ bool FitSpallationDt::FitDtDistribution(TH1F& dt_mu_lowe_hist, TH1F& dt_mu_lowe_
 		//gPad->WaitPrimitive();
 		
 		std::cout<<"everything"<<std::endl;
-		dt_mu_lowe_hist_log.Draw();
+		dt_mu_lowe_hist.Draw();
 		func_sum.Draw("same");
 		func_early.Draw("same");
 		func_late.Draw("same");
 		//gPad->WaitPrimitive();
+		*/
 		
 		break;
 		}
 	case 3:{
 		// fit the range 0.8-6s with the components previously fit now fixed,
 		// allowing additional components 15C + 16N
-		std::cout<<"calling BuildFunction for case "<<rangenum<<", 15C+16N+8Li_8B"<<std::endl;
+		Log(toolName+"calling BuildFunction for time range case "+toString(rangenum)
+			+", 15C+16N+8Li_8B",v_debug,verbosity);  // FIXME update if we're going to keep everything
+		/*
 		TF1 func_sum = BuildFunction({"15C","16N","8Li_8B"},0.8,6);
-		std::cout<<"retrieving past results"<<std::endl;
+		Log(toolName+" retrieving results from past fits in case "+toString(rangenum)+" fit",v_debug,verbosity);
 		PullFitAmp(func_sum,"8Li_8B");
+		PullFitAmp(func_sum,"16N",false); // FIXME add back in
+		*/
+		TF1 func_sum = BuildFunction({"12B","12N","16N","11Be","9Li","8He_9C","8Li_8B","15C"},0.8,6);
+		Log(toolName+" retrieving results from past fits in case "+toString(rangenum)+" fit",v_debug,verbosity);
+		PullFitAmp(func_sum,"12B");
+		PullFitAmp(func_sum,"12N");
+		PullFitAmp(func_sum,"11Be");
+		PullFitAmp(func_sum,"9Li");
+		PullFitAmp(func_sum,"8He_9C");
+		PullFitAmp(func_sum,"8Li_8B");
+		PullFitAmp(func_sum,"16N",false);
+		
 		// fit the new components
-		std::cout<<"fitting"<<std::endl;
-		dt_mu_lowe_hist_log.Fit(&func_sum,"R","",0.8,6);
+		Log(toolName+" doing case "+toString(rangenum)+" fit",v_debug,verbosity);
+		std::string fitopt = (verbosity>2) ? "Rq" : "R";
+		dt_mu_lowe_hist.Fit(&func_sum,fitopt.c_str(),"",0.8,6);
 		// record the results for the next step
-		std::cout<<"recording fit results"<<std::endl;
+		Log(toolName+" recording results from case "+toString(rangenum)+" fit",v_debug,verbosity);
 		PushFitAmp(func_sum,"15C");
 		PushFitAmp(func_sum,"16N");
 		fit_amps["const_3"] = func_sum.GetParameter("const");
-		dt_mu_lowe_hist_log.Draw();
-		//gPad->WaitPrimitive();
-		dt_mu_lowe_hist_log.GetListOfFunctions()->Clear();
+		
+		if(verbosity){
+			std::cout<<"recorded results were: "<<std::endl
+					 <<"15C: "<<fit_amps["15C"]<<std::endl
+					 <<"16N: "<<fit_amps["16N"]<<std::endl
+					 <<"const_3: "<<fit_amps["const_3"]<<std::endl;
+		}
+		
+		// draw the fit, if we want to check it
+		/*
+		dt_mu_lowe_hist.Draw();
+		gPad->WaitPrimitive();
+		*/
+		
+		// remove this intermediate fit from the list of functions
+		// associated with our dt distribution, since we no longer need it
+		dt_mu_lowe_hist.GetListOfFunctions()->Clear();
+		
 		break;
 		}
 	case 4:{
-		// final case: release all the fixes but keep the previously fit values as starting points.
-		std::cout<<"calling BuildFunction for case "<<rangenum<<", everything"<<std::endl;
+		// final case: release all the parameters but keep the previously fit values as starting points.
+		Log(toolName+"calling BuildFunction for time range case "+toString(rangenum)
+			+", everything",v_debug,verbosity);
 		TF1 func_sum = BuildFunction({"12B","12N","16N","11Be","9Li","8He_9C","8Li_8B","15C"},0,30);
 		func_sum.SetLineColor(kRed);
-		std::cout<<"retrieving past results"<<std::endl;
+		Log(toolName+" retrieving results from past fits in case "+toString(rangenum)+" fit",v_debug,verbosity);
 		PullFitAmp(func_sum,"12B",false);
 		PullFitAmp(func_sum,"12N",false);
 		PullFitAmp(func_sum,"16N",false);
@@ -507,18 +651,35 @@ bool FitSpallationDt::FitDtDistribution(TH1F& dt_mu_lowe_hist, TH1F& dt_mu_lowe_
 		PullFitAmp(func_sum,"8Li_8B",false);
 		PullFitAmp(func_sum,"15C",false);
 		
-		std::cout<<"fitting"<<std::endl;
-		TFitResultPtr fitresult =  dt_mu_lowe_hist_log.Fit(&func_sum,"RS","",0,30);
+		Log(toolName+" doing case "+toString(rangenum)+" fit",v_debug,verbosity);
+		std::string fitopt = (verbosity>2) ? "RSq" : "RS";
+		TFitResultPtr fitresult =  dt_mu_lowe_hist.Fit(&func_sum,fitopt.c_str(),"",0,30);
 		
-		std::cout<<"fixing pars"<<std::endl;
+		Log(toolName+" recording results from case "+toString(rangenum)+" fit",v_debug,verbosity);
+		if(verbosity) std::cout<<"recorded results were: "<<std::endl;
+		// for some reason TF1::GetParameter() was returning double values truncated to integer
+		// Maybe this was something that happens when we fix the sign in PushFitAmp
+		// Anyway, using the TFitResultPtr as that seems to work...
+		for(auto&& anisotope : fit_amps){
+			if(anisotope.first.substr(0,5)=="const") continue; // not a real isotope
+			int par_number = func_sum.GetParNumber(("amp_"+anisotope.first).c_str());
+			double amp = fitresult->Parameter(par_number);
+			PushFitAmp(abs(amp),anisotope.first);
+			if(verbosity) std::cout<<anisotope.first<<": "<<amp<<std::endl;
+		}
+		fit_amps["const_4"] = func_sum.GetParameter("const");
+		
+		// Debug check
+		Log(toolName+" correcting fit parameter signs",v_debug,verbosity);
 		// we want to constrain the number of each isotope to be >0, which would
 		// mean putting a lower limit of 0 on the amplitude in the fit.
 		// unfortunately ROOT only lets us put both upper and lower limits (not just one)
-		// and Minuit doesn't like limits of 0 and 10E10 (all sorts of errors).
-		// So, we put no constraint on the parameter, but our function (from BuildFunction)
-		// only uses its magnitude. This means we end up with fit values that are negative,
-		// but resulting function is the same even if we fix the sign to positive. So.
-		// let's try to fix up this hack by setting all abundances positive as they should be
+		// and Minuit doesn't like suitable limits of e.g. 0 and 10E10 (all sorts of errors).
+		// So instead we put no constraint on the parameter, but our function (from BuildFunction)
+		// only uses its magnitude. This means we may end up with fit values that are negative,
+		// but resulting function should be the same even if we flip the sign to positive.
+		// As a debug check, let's correct the signs of all abundances to positive,
+		// and then re-draw then function. It should still fit our data nicely.
 		for(int pari=0; pari<func_sum.GetNpar(); ++pari){
 			std::string parname = func_sum.GetParName(pari);
 			if(parname.substr(0,9)=="lifetime_") continue; // skip lifetimes, they're good
@@ -536,15 +697,22 @@ bool FitSpallationDt::FitDtDistribution(TH1F& dt_mu_lowe_hist, TH1F& dt_mu_lowe_
 			// much simpler in that case
 			func_sum.SetParameter(pari,abs(func_sum.GetParameter(pari)));
 		}
-		dt_mu_lowe_hist_log.Draw();
+		dt_mu_lowe_hist.Draw();
 		gPad->SetLogx();
 		gPad->SetLogy();
+//		gPad->Modified();
+//		gPad->Update();
+//		gPad->WaitPrimitive();
 		
-		// since we're having issues, let's see how well the old results fit our data
-		TF1 func_paper = BuildFunction2({"12B","12N","16N","11Be","9Li","8He_9C","8Li","8B","15C"},0,30);
-		// scale the paper down to be around the same num events as us, to ease comparison
-		std::cout<<"retrieving paper results"<<std::endl;
-		bool correct_energy_threshold = false;
+		// Debug check
+		// we're having issues, so let's see how well the 2015 results fit our data
+		TF1 func_paper = BuildFunctionNoHack({"12B","12N","16N","11Be","9Li","8He_9C","8Li","8B","15C"},0,30);
+		func_paper.SetName("2015 Paper");
+		func_paper.SetTitle("2015 Paper");
+		// the 2015 paper had a lower energy threshold, so adjust results
+		// based on the different efficiency of selection, to ease comparison
+		bool correct_energy_threshold = true;
+		Log(toolName+" getting paper parameters for comparsion function",v_debug,verbosity);
 		PullPaperAmp(func_paper,"12B",correct_energy_threshold,paper_scaling);
 		PullPaperAmp(func_paper,"12N",correct_energy_threshold,paper_scaling);
 		PullPaperAmp(func_paper,"16N",correct_energy_threshold,paper_scaling);
@@ -559,53 +727,27 @@ bool FitSpallationDt::FitDtDistribution(TH1F& dt_mu_lowe_hist, TH1F& dt_mu_lowe_
 		func_paper.SetLineColor(kViolet);
 		func_paper.Draw("same");
 		
-		gPad->Modified();
-		gPad->Update();
-		gPad->WaitPrimitive();
-		
-		std::cout<<"recording fit results"<<std::endl;
-		// for some reason TF1::GetParameter() is returning double values truncated to integer
-		// is this something that happens when we fix the sign?
-		PushFitAmp(func_sum,"12B");
-		PushFitAmp(func_sum,"12N");
-		PushFitAmp(func_sum,"16N");
-		PushFitAmp(func_sum,"11Be");
-		PushFitAmp(func_sum,"9Li");
-		PushFitAmp(func_sum,"8He_9C");
-		PushFitAmp(func_sum,"8Li_8B");
-		PushFitAmp(func_sum,"15C");
-		fit_amps["const_4"] = func_sum.GetParameter("const");
-		
-		// so i guess we'll use the TFitResultPtr as that seems to work...
-		for(auto&& anisotope : fit_amps){
-			if(anisotope.first.substr(0,5)=="const") continue; // not a real isotope
-			int par_number = func_sum.GetParNumber(("amp_"+anisotope.first).c_str());
-			double amp = fitresult->Parameter(par_number);
-			PushFitAmp(abs(amp),anisotope.first);
-			std::cout<<"We had "<<amp<<" "<<anisotope.first<<" decays"<<std::endl;
-		}
-		
-		// add the individual isotopic contributions to reproduce the old plot
+		// Draw the individual isotopic contributions along with the total to reproduce 2015 Figure 3
 		std::vector<TF1> indiv_funcs;
 		indiv_funcs.reserve(fit_amps.size());
 		for(auto&& theisotope : fit_amps){
 			if(theisotope.first.substr(0,5)=="const") continue; // not a real isotope
-			std::cout<<"amplitude of isotope "<<theisotope.first<<" is "<<theisotope.second<<std::endl;
-			//if(theisotope.second<=0.) continue;
 			std::string anisotope = theisotope.first;
 			TF1 next_func = BuildFunction({anisotope},0,30);
 			PullFitAmp(next_func,anisotope);
 			next_func.SetLineColor(colourwheel.GetNextColour());
 			
-			// this lot might not be necessary ...? SetRangeUser wasn't working, but now it is...?
+			// we want to fix the y range of the plot to make all the contributions visible,
+			// but setrangeuser doesn't seem to be working, so try constraining the x ranges
+			// to the time range over which this function will be within our desired y range
 			double ltime;
-			// setrangeuser doesn't seem to be working, so try constraining the x range
 			if(anisotope.find("_")==std::string::npos){
 				// not a pair
 				ltime = lifetimes.at(anisotope);
 			} else {
 				// pair of isotopes
-				// it's not possible to generically solve the necessary equation,
+				// it's not possible to generically solve the necessary equation
+				// to know what time range corresponds to a given y range,
 				// but it should be good enough just take the average lifetime
 				std::string first_isotope = anisotope.substr(0,anisotope.find_first_of("_"));
 				std::string second_isotope = anisotope.substr(anisotope.find_first_of("_")+1,std::string::npos);
@@ -616,16 +758,10 @@ bool FitSpallationDt::FitDtDistribution(TH1F& dt_mu_lowe_hist, TH1F& dt_mu_lowe_
 			if(maxx<0) maxx = 30;
 			next_func.SetRange(0.0,maxx);
 			
-//			std::cout<<anisotope<<" has amplitude "<<theisotope.second<<std::endl;
-//			std::cout<<"drawing"<<std::endl;
-//			next_func.Draw();
-////			next_func.GetYaxis()->SetRangeUser(1E-4,1E3);
-//			gPad->Modified();
-//			gPad->Update();
-//			gPad->WaitPrimitive();
-			// this works, but it doesn't add them to the legend!!
-			//hist_to_fit.GetListOfFunctions()->Add(&indiv_funcs.back());
+			// the following adds all functions to the plot, but it doesn't add them to the legend!!
+			//dt_mu_lowe_hist.GetListOfFunctions()->Add(&indiv_funcs.back());
 			
+			// instead keep them in a vector
 			indiv_funcs.push_back(next_func);
 			indiv_funcs.back().SetName(anisotope.c_str());
 			indiv_funcs.back().SetTitle(anisotope.c_str());
@@ -634,28 +770,40 @@ bool FitSpallationDt::FitDtDistribution(TH1F& dt_mu_lowe_hist, TH1F& dt_mu_lowe_
 		TF1 constfunc("constfunc","[0]",0,30);
 		constfunc.SetParameter(0,fit_amps["const_4"]);
 		indiv_funcs.push_back(constfunc);
-		//hist_to_fit.GetListOfFunctions()->Add(&indiv_funcs.back());
 		indiv_funcs.back().SetName("const");
 		indiv_funcs.back().SetTitle("const");
 		
 		// draw it all
-		//hist_to_fit.Draw();
-		//hist_to_fit.GetYaxis()->SetRangeUser(1E-3,1E5);
-		dt_mu_lowe_hist_log.Draw();
-		dt_mu_lowe_hist_log.GetYaxis()->SetRangeUser(1.,1E5);
+		dt_mu_lowe_hist.Draw();  // total fit is drawn implicitly as it is owned by the data histo
+		dt_mu_lowe_hist.GetYaxis()->SetRangeUser(1.,1E7);
 		for(auto&& afunc : indiv_funcs){ std::cout<<"drawing "<<afunc.GetName()<<std::endl; afunc.Draw("same"); }
+		func_paper.Draw("same");
 		gStyle->SetOptStat(0);
 		gStyle->SetOptFit(0);
 		gPad->GetCanvas()->BuildLegend();
 		gPad->Modified();
 		gPad->Update();
-		//gPad->WaitPrimitive();
+		gPad->WaitPrimitive();
 		
 		// reproduce the paper plot including breakdowns, to check our value extraction
-		BuildPaperPlot();
+		//BuildPaperPlot();
 		
 		gPad->SetLogx(false);
 		gPad->SetLogy(false);
+		
+		// one last thing: if we've been using BuildFunctionHack, then
+		// we've been fitting only the *additional* number of events on top of
+		// half the value found by the 2015 paper. Before returning we need to set
+		// fit_amps to be the full number of events, including this contribution
+		if(useHack){
+			for(auto&& anisotope : fit_amps){
+				if(anisotope.first.substr(0,5)=="const") continue; // not a real isotope
+				// ensure the following matches what's being added by BuildFunctionHack
+				double paperval = GetPaperAmp(anisotope.first, true, paper_scaling);
+				anisotope.second += (paperval/2.);
+			}
+		}
+		
 		break;
 		}
 	default:
@@ -665,7 +813,344 @@ bool FitSpallationDt::FitDtDistribution(TH1F& dt_mu_lowe_hist, TH1F& dt_mu_lowe_
 	return true;
 }
 
+// =========================================================================
+// =========================================================================
+
+// Helper functions for constructing the TF1s with which we fit our dt distribution
+
+// wrapper around either BuildFunctionNoHack or BuildFunctionHack, depending on whether we want
+// to try to coerce the fit result to a number we like better
+TF1 FitSpallationDt::BuildFunction(std::vector<std::string> isotopes, double func_min, double func_max){
+	if(useHack){  // set via config file parameter
+		return BuildFunctionHack(isotopes, func_min, func_max);
+	} else {
+		return BuildFunctionNoHack(isotopes, func_min, func_max);
+	}
+	return TF1{}; // to silence compiler warnings
+}
+
+TF1 FitSpallationDt::BuildFunctionNoHack(std::vector<std::string> isotopes, double func_min, double func_max){
+	/* Construct a TF1 based on the list of isotopes given, over the time range given.
+	   We name the function parameters and fix the lifetimes, since they're known. */
+	
+	std::string total_func="";
+	std::string func_name="";
+	std::map<std::string,int> parameter_posns;
+	int next_par_index=0;
+	for(std::string& anisotope : isotopes){
+		func_name += anisotope+"_";
+		//std::cout<<"adding isotope "<<anisotope<<std::endl;
+		// first, this 'isotope' may be a degenerate pair, so try to split it apart
+		if((!split_iso_pairs) || anisotope.find("_")==std::string::npos){
+			// not a pair
+			//std::cout<<"not a pair"<<std::endl;
+			int first_index=next_par_index;
+			// "([0]/[1])*exp(-x/[1])"
+			
+			// Or that's the function you'd expect. Fig 3 plots from 0--30s, with x-axis in seconds;
+			// which means that F(t) = dN/dt is also in seconds ... but Fig 3's y-axis is in events / 0.006s!!
+			// The bin width is variable (it's a log-log plot), so we already need to scale our bin counts
+			// by the bin width to get consistent units, so there's no reason not to use events/second.
+			// Still, to make a comparable plot, we could scale our histogram bin counts up using TH1::Scale,
+			// but then our fit values will be off unless our fit function accounts for it.
+			// (this also ensures the paper plot overlay comparison has the correct scaling).
+			
+			std::string scalestring = std::to_string(binwidth)+"*";  // "0.006*"
+			std::string this_func =  scalestring+"(abs(["+toString(next_par_index)+"])"  // original
+//			std::string this_func =  scalestring+"(["+toString(next_par_index)+"]"         // laura
+									+"/["+toString(next_par_index+1)
+									+"])*exp(-x/["+toString(next_par_index+1)+"])";
+			next_par_index +=2;
+			// add this function to the total function string
+			total_func = (total_func=="") ? this_func : total_func+" + "+this_func;
+			// add the parameter names to our map
+			parameter_posns.emplace("amp_"+anisotope,first_index);
+			parameter_posns.emplace("lifetime_"+anisotope,first_index+1);
+		} else {
+			// it's a pair. For now, only support two isotopes at a time.
+			//std::cout<<"a pair, splitting into ";
+			int first_index=next_par_index;
+			std::string first_isotope = anisotope.substr(0,anisotope.find_first_of("_"));
+			std::string second_isotope = anisotope.substr(anisotope.find_first_of("_")+1,std::string::npos);
+			//std::cout<<first_isotope<<" and "<<second_isotope<<std::endl;
+			// the fit function isn't just the sum of two single isotope functions
+			// as they share an amplitude and constant
+			//"[0]*0.5*(exp(-x/[1])/[1]+exp(-x/[2])/[2])
+			// as above, add in the additional scaling factor to get Y units of events/0.006s
+			std::string scalestring = std::to_string(binwidth)+"*";  // "0.006*"
+			std::string this_func =  scalestring+"abs(["+toString(next_par_index)+"])*0.5*"
+									+"(exp(-x/["+toString(next_par_index+1)+"])/" // don't increment index
+									+"["+toString(next_par_index+1)+"]+"
+									+"exp(-x/["+toString(next_par_index+2)+"])/"  // don't increment index
+									+"["+toString(next_par_index+2)+"])";
+			next_par_index += 3;
+			// add this function to the total function string
+			total_func = (total_func=="") ? this_func : total_func+" + "+this_func;
+			// add the parameter names to our map
+			parameter_posns.emplace("amp_"+anisotope,first_index++);
+			parameter_posns.emplace("lifetime_"+first_isotope,first_index++);
+			parameter_posns.emplace("lifetime_"+second_isotope,first_index);
+		}
+	}
+	// add the constant term
+	total_func += " + abs(["+toString(next_par_index)+"])";
+	parameter_posns.emplace("const",next_par_index);
+	
+	// build the total function from the sum of all strings
+	func_name.pop_back(); // remove trailing '_'
+	//std::cout<<"function is "<<total_func<<std::endl;
+	TF1 afunc(func_name.c_str(),total_func.c_str(),func_min,func_max);
+	
+	// OK, propagate parameter names to the function
+	for(auto&& next_par : parameter_posns){
+		//std::cout<<"setting parname "<<next_par.second<<" to "<<next_par.first<<std::endl;
+		afunc.SetParName(next_par.second,next_par.first.c_str());
+		if(next_par.first.substr(0,9)=="lifetime_"){
+			std::string anisotope = next_par.first.substr(9,std::string::npos);
+			//std::cout<<"fixing lifetime of "<<anisotope<<std::endl;
+			FixLifetime(afunc,anisotope);
+		} else {
+			// try setting par limits
+			if(use_par_limits) afunc.SetParLimits(next_par.second,0,10000000);
+			// for amplitudes / background constant we'll set the lower limit to be 0.
+			// This seems to be necessary for some fits otherwise
+			// ROOT gives negative amounts of some isotopes.
+			//afunc.SetParLimits(next_par.second, 0, 1E9); // FIXME what to use as upper limit????
+			// strictly i think we ought to give initial fit values,
+			// but thankfully MINUIT manages without them, but it doesn't like having
+			// (default) initial values at the limit, so set some small amount
+			//afunc.SetParameter(next_par.second,10);
+		}
+	}
+	
+	// to try to reproduce Laura's reproduction of the 2015 paper.... do not use the constant.
+	if(fix_const){
+		int const_par_number = afunc.GetParNumber("const");
+		afunc.FixParameter(const_par_number,0);
+	}
+	
+	// return the built function
+	return afunc;
+}
+
+// this is the hack
+TF1 FitSpallationDt::BuildFunctionHack(std::vector<std::string> isotopes, double func_min, double func_max){
+	std::string total_func="";
+	std::string func_name="";
+	std::map<std::string,int> parameter_posns;
+	int next_par_index=0;
+	for(std::string& anisotope : isotopes){
+		func_name += anisotope+"_";
+		//std::cout<<"adding isotope "<<anisotope<<std::endl;
+		// first, this 'isotope' may be a degenerate pair, so try to split it apart
+		if((!split_iso_pairs) || anisotope.find("_")==std::string::npos){
+			// not a pair
+			//std::cout<<"not a pair"<<std::endl;
+			int first_index=next_par_index;
+			
+			// get paper amplitude, corrected for energy efficiency and scaled by config file scaling
+			double paperval = GetPaperAmp(anisotope,true,paper_scaling);
+			//std::cout<<"paperval= "<<paperval<<std::endl;
+			std::string paperstring = std::to_string(paperval/2.); // fix half the paper val, fit the rest
+			
+			// "((x.xx + abs([0]))/[1])*exp(-x/[1])"
+			std::string scalestring = std::to_string(binwidth)+"*";  // "0.006*"
+			std::string this_func =  scalestring+"(("+paperstring+"+abs(["+toString(next_par_index)
+									+"]))/["+toString(next_par_index+1)
+									+"])*exp(-x/["+toString(next_par_index+1)+"])";
+			next_par_index +=2;
+			// add this function to the total function string
+			total_func = (total_func=="") ? this_func : total_func+" + "+this_func;
+			// add the parameter names to our map
+			parameter_posns.emplace("amp_"+anisotope,first_index);
+			parameter_posns.emplace("lifetime_"+anisotope,first_index+1);
+		} else {
+			// it's a pair. For now, only support two isotopes at a time.
+			//std::cout<<"a pair, splitting into ";
+			std::string first_isotope = anisotope.substr(0,anisotope.find_first_of("_"));
+			std::string second_isotope = anisotope.substr(anisotope.find_first_of("_")+1,std::string::npos);
+			//std::cout<<first_isotope<<" and "<<second_isotope<<std::endl;
+			int first_index=next_par_index;
+			
+			// get paper amplitude, corrected for energy efficiency and scaled by config file scaling
+			//std::cout<<"getting paper amp"<<std::endl;
+			double paperval = GetPaperAmp(anisotope,true,paper_scaling);
+			//std::cout<<"paperval= "<<paperval<<std::endl;
+			// fix the abundance to at least half the paper val, fit the rest
+			std::string paperstring = std::to_string(paperval/2.);
+			
+			// the fit function isn't just the sum of two single isotope functions
+			// as they share an amplitude and constant
+			//"(x.xx + abs([0]))*0.5*(exp(-x/[1])/[1]+exp(-x/[2])/[2])
+			std::string scalestring = std::to_string(binwidth)+"*";  // "0.006*"
+			std::string this_func =  scalestring+"("+paperstring+"+abs(["+toString(next_par_index)+"]))*0.5*"
+									+"(exp(-x/["+toString(next_par_index+1)+"])/" // don't increment index
+									+"["+toString(next_par_index+1)+"]+"
+									+"exp(-x/["+toString(next_par_index+2)+"])/"  // don't increment index
+									+"["+toString(next_par_index+2)+"])";
+			next_par_index += 3;
+			// add this function to the total function string
+			total_func = (total_func=="") ? this_func : total_func+" + "+this_func;
+			// add the parameter names to our map
+			parameter_posns.emplace("amp_"+anisotope,first_index++);
+			parameter_posns.emplace("lifetime_"+first_isotope,first_index++);
+			parameter_posns.emplace("lifetime_"+second_isotope,first_index);
+		}
+	}
+	// add the constant term
+	total_func += " + abs(["+toString(next_par_index)+"])";
+	parameter_posns.emplace("const",next_par_index);
+	
+	// build the total function from the sum of all strings
+	func_name.pop_back(); // remove trailing '_'
+	std::cout<<"function is "<<total_func<<std::endl;
+	TF1 afunc(func_name.c_str(),total_func.c_str(),func_min,func_max);
+	
+	// OK, propagate parameter names to the function
+	for(auto&& next_par : parameter_posns){
+		//std::cout<<"settin parname "<<next_par.second<<" to "<<next_par.first<<std::endl;
+		afunc.SetParName(next_par.second,next_par.first.c_str());
+		if(next_par.first.substr(0,9)=="lifetime_"){
+			std::string anisotope = next_par.first.substr(9,std::string::npos);
+			//std::cout<<"fixing lifetime of "<<anisotope<<std::endl;
+			FixLifetime(afunc,anisotope);
+		} else {
+			// for amplitudes / background constant we'll set the lower limit to be 0.
+			// This seems to be necessary for some fits otherwise
+			if(use_par_limits) afunc.SetParLimits(next_par.second,0,10000000);
+			// ROOT gives negative amounts of some isotopes.
+			//afunc.SetParLimits(next_par.second, 0, 1E9); // FIXME what to use as upper limit????
+			// strictly i think we ought to give initial fit values,
+			// but thankfully MINUIT manages without them, but it doesn't like having
+			// (default) initial values at the limit, so set some small amount
+			//afunc.SetParameter(next_par.second,10);
+		}
+	}
+	
+	// to try to reproduce Laura's reproduction of the 2015 paper.... do not use the constant.
+	if(fix_const){
+		int const_par_number = afunc.GetParNumber("const");
+		afunc.FixParameter(const_par_number,0);
+	}
+	
+	// return the built function
+	return afunc;
+}
+
+// fix lifetime parameter of a TF1
+void FitSpallationDt::FixLifetime(TF1& func, std::string isotope){
+	int par_number = func.GetParNumber(("lifetime_"+isotope).c_str());
+	func.FixParameter(par_number,lifetimes.at(isotope));
+}
+
+// extract an abundance paramerer result from a TF1 and record it into our map of amplitudes
+void FitSpallationDt::PushFitAmp(TF1& func, std::string isotope){
+//	std::cout<<"fixing fit result for func "<<func.GetName()<<", isotope "<<isotope<<std::endl;
+//	std::cout<<"available pars are: "<<std::endl;
+//	for(int i=0; i<func.GetNpar(); ++i){
+//		std::cout<<i<<"="<<func.GetParName(i)<<std::endl;
+//	}
+//	int par_number = func.GetParNumber(("amp_"+isotope).c_str()); // can do straight by name
+	double v = static_cast<double>(func.GetParameter(("amp_"+isotope).c_str()));
+	fit_amps[isotope] = func.GetParameter(("amp_"+isotope).c_str());
+}
+
+// record an abundance paramerer result, given as a double, into our map of amplitudes
+void FitSpallationDt::PushFitAmp(double amp, std::string isotope){
+	fit_amps[isotope] = amp;
+}
+
+
+// use our map of amplitudes to set the value of a TF1 abundance parameter
+void FitSpallationDt::PullFitAmp(TF1& func, std::string isotope, bool fix){
+	std::string parname = (isotope.substr(0,5)=="const") ? "const" : "amp_"+isotope;
+	int par_number = func.GetParNumber(parname.c_str());
+	if(fix){
+		func.FixParameter(par_number,fit_amps.at(isotope));
+	} else {
+		func.SetParameter(par_number,fit_amps.at(isotope));
+	}
+}
+
+// =========================================================================
+// =========================================================================
+
+// Various functions for retrieving results based on the 2015 paper, for comparison
+
+double FitSpallationDt::GetPaperAmp(std::string isotope, bool threshold_scaling, double fixed_scaling){
+	double paperval;
+	if(isotope!="const"){
+		// the values in papervals are rates in events / kton / day, integrated over all beta energies.
+		// To obtain Ni, the initial number of observable events over our live time,
+		// we need to multiply by the livetime, the fiducial volume, and the efficiency of observation
+		// (i.e. total efficiency all cuts)
+		// Everything except the low energy cut is isotope independent.
+		// the efficiency of the energy cut we need to look up for each isotope
+		// The threshold_scaling bool defines whether we use the 6MeV efficiency from the paper,
+		// or an 8MeV efficiency from FLUKA + skdetsim. For the same livetime this would give the number
+		// of events we would expect to see with a higher E threshold so that we can compare.
+		double energy_cut_eff = 1.;
+		if(isotope.find("_")==std::string::npos){
+			// not a pairing - can look up efficiency directly
+			if(threshold_scaling){
+				energy_cut_eff = reco_effs_8mev.at(isotope);
+			} else {
+				energy_cut_eff = papereffs.at(isotope);
+			}
+			paperval = papervals.at(isotope);
+		} else {
+			std::string first_isotope = isotope.substr(0,isotope.find_first_of("_"));
+			std::string second_isotope = isotope.substr(isotope.find_first_of("_")+1,std::string::npos);
+			// how do we handle efficiency for pairs?
+			// best we can do is assume half for each and average the efficiency i think....
+			if(threshold_scaling){
+				energy_cut_eff = 0.5*(reco_effs_8mev.at(first_isotope) + reco_effs_8mev.at(second_isotope));
+			} else {
+				energy_cut_eff = 0.5*(papereffs.at(first_isotope) + papereffs.at(second_isotope));
+			}
+			// for a pair of isotopes we may have one or both
+			if(papervals.count(isotope)){
+				// if we have a combined amplitude, use that
+				paperval = papervals.at(isotope);
+			} else {
+				// otherwise take the sum
+				double paperval1 = papervals.at(first_isotope);
+				double paperval2 = papervals.at(second_isotope);
+				paperval = (paperval1+paperval2);
+			}
+		}
+		// ok, convert Ri to Ni
+//		std::cout<<"calculating paper amplitude for "<<isotope<<", rate = "
+//				 <<paperval<<", FV="<<fiducial_vol<<", T="<<paper_livetime
+//				 <<" energy cut eff = "<<energy_cut_eff<<"%, total eff = "
+//				 <<((paper_first_reduction_eff/100.)*(paper_dlt_cut_eff/100.)*(energy_cut_eff/100.)*100.)
+//				 <<std::endl;
+		paperval *= fiducial_vol * paper_livetime * (paper_first_reduction_eff/100.)
+					 * (paper_dlt_cut_eff/100.) * (energy_cut_eff/100.);
+//		std::cout<<"initial abundance = "<<paperval<<std::endl;
+	} else {
+		// the constant term isn't a rate, it's read straight off the plot so doesn't need conversion.
+		// But, if we're comparing across energy thresholds, it should also be scaled
+		// down by the relative rate of random backgrounds above 8MeV vs above 6MeV
+		// TODO obtain that number...
+		paperval = papervals.at(isotope); // for now just use the value read off the plot, no scaling
+	}
+	
+	paperval *= fixed_scaling; // superfluous, just in case
+	return paperval;
+}
+
+void FitSpallationDt::PullPaperAmp(TF1& func, std::string isotope, bool threshold_scaling, double fixed_scaling){
+	double paperval = GetPaperAmp(isotope, threshold_scaling, fixed_scaling);
+	std::string parname = (isotope=="const") ? "const" : "amp_"+isotope;
+	func.SetParameter(parname.c_str(), paperval);
+}
+
+// Debug function
 void FitSpallationDt::BuildPaperPlot(){
+	/* double check we can reproduce Figure 3 from the paper */
+	std::cout<<"BuildPaperPlot reproducing Fig 3"<<std::endl;
+	
 	// add the individual isotopic contributions to reproduce the old plot
 	std::vector<TF1> indiv_funcs;
 	std::vector<std::string> isotope_names;
@@ -674,12 +1159,10 @@ void FitSpallationDt::BuildPaperPlot(){
 		if(theisotope.first.substr(0,5)=="const") continue; // not a real isotope
 		if(theisotope.second==0) continue; // do not add to plot isotopes with no abundance
 		
-		std::cout<<"****** buildpaperplot rate of isotope "
-				 <<theisotope.first<<" is "<<theisotope.second<<std::endl;
 		std::string anisotope = theisotope.first;
-		TF1 next_func = BuildFunction({anisotope},0,30);
+		TF1 next_func = BuildFunctionNoHack({anisotope},0,30);
 		
-		PullPaperAmp(next_func,anisotope,false,paper_scaling);
+		PullPaperAmp(next_func,anisotope,false);
 		next_func.SetLineColor(colourwheel.GetNextColour());
 		
 		indiv_funcs.push_back(next_func);
@@ -695,12 +1178,12 @@ void FitSpallationDt::BuildPaperPlot(){
 	indiv_funcs.back().SetTitle("const");
 	
 	// now the sum of everything
-	TF1 func_paper = BuildFunction(isotope_names,0.001,30);
+	TF1 func_paper = BuildFunctionNoHack(isotope_names,0.001,30);
 	func_paper.SetName("total");
 	func_paper.SetTitle("total");
 	// set the amplitudes
 	for(auto&& theisotope : isotope_names){
-		PullPaperAmp(func_paper,theisotope,false,paper_scaling);
+		PullPaperAmp(func_paper,theisotope,false);
 	}
 	func_paper.SetParameter("const",papervals.at("const"));
 	
@@ -730,296 +1213,11 @@ void FitSpallationDt::BuildPaperPlot(){
 	
 }
 
-// this is the true BuildFunction
-TF1 FitSpallationDt::BuildFunction2(std::vector<std::string> isotopes, double func_min, double func_max){
-	std::string total_func="";
-	std::string func_name="";
-	std::map<std::string,int> parameter_posns;
-	int next_par_index=0;
-	for(std::string& anisotope : isotopes){
-		func_name += anisotope+"_";
-		//std::cout<<"adding isotope "<<anisotope<<std::endl;
-		// first, this 'isotope' may be a degenerate pair, so try to split it apart
-		if(anisotope.find("_")==std::string::npos){
-			// not a pair
-			//std::cout<<"not a pair"<<std::endl;
-			int first_index=next_par_index;
-			// "([0]/[1])*exp(-x/[1])"
-			
-			// Or that's the function you'd expect. Fig 3 plots from 0--30s, with x-axis in seconds;
-			// which means that F(t) = dN/dt is also in seconds ... but Fig 3's y-axis is in events / 0.006s!!
-			// The bin width is variable (it's a log-log plot), so we already need to scale our bin counts
-			// by the bin width to get consistent units, so there's no reason not to use events/second.
-			// Still, to make a comparable plot, we could scale our histogram bin counts up using TH1::Scale,
-			// but then our fit values will be off unless our fit function accounts for it.
-			// (this also ensures the paper plot overlay comparison has the correct scaling).
-			
-			std::string scalestring = "0.006*";
-			std::string this_func =  scalestring+"(abs(["+toString(next_par_index)
-									+"])/["+toString(next_par_index+1)
-									+"])*exp(-x/["+toString(next_par_index+1)+"])";
-			std::cout<<"function is "<<this_func<<std::endl;
-			next_par_index +=2;
-			// add this function to the total function string
-			total_func = (total_func=="") ? this_func : total_func+" + "+this_func;
-			// add the parameter names to our map
-			parameter_posns.emplace("amp_"+anisotope,first_index);
-			parameter_posns.emplace("lifetime_"+anisotope,first_index+1);
-		} else {
-			// it's a pair. For now, only support two isotopes at a time.
-			//std::cout<<"a pair, splitting into ";
-			std::string first_isotope = anisotope.substr(0,anisotope.find_first_of("_"));
-			std::string second_isotope = anisotope.substr(anisotope.find_first_of("_")+1,std::string::npos);
-			//std::cout<<first_isotope<<" and "<<second_isotope<<std::endl;
-			// the fit function isn't just the sum of two single isotope functions
-			// as they share an amplitude and constant
-			//"[0]*0.5*(exp(-x/[1])/[1]+exp(-x/[2])/[2])
-			// as above, add in the additional scaling factor to get Y units of events/0.006s
-			std::string scalestring = "0.006*";
-			int first_index=next_par_index;
-			std::string this_func =  scalestring+"abs(["+toString(next_par_index)+"])*0.5*"
-									+"(exp(-x/["+toString(next_par_index+1)+"])/" // don't increment index
-									+"["+toString(next_par_index+1)+"]+"
-									+"exp(-x/["+toString(next_par_index+2)+"])/"  // don't increment index
-									+"["+toString(next_par_index+2)+"])";
-			next_par_index += 3;
-			// add this function to the total function string
-			total_func = (total_func=="") ? this_func : total_func+" + "+this_func;
-			// add the parameter names to our map
-			parameter_posns.emplace("amp_"+anisotope,first_index++);
-			parameter_posns.emplace("lifetime_"+first_isotope,first_index++);
-			parameter_posns.emplace("lifetime_"+second_isotope,first_index);
-		}
-	}
-	// add the constant term
-	total_func += " + abs(["+toString(next_par_index)+"])";
-	parameter_posns.emplace("const",next_par_index);
-	
-	// build the total function from the sum of all strings
-	func_name.pop_back(); // remove trailing '_'
-	TF1 afunc(func_name.c_str(),total_func.c_str(),func_min,func_max);
-	
-	// OK, propagate parameter names to the function
-	for(auto&& next_par : parameter_posns){
-		std::cout<<"setting parname "<<next_par.second<<" to "<<next_par.first<<std::endl;
-		afunc.SetParName(next_par.second,next_par.first.c_str());
-		if(next_par.first.substr(0,9)=="lifetime_"){
-			std::string anisotope = next_par.first.substr(9,std::string::npos);
-			std::cout<<"fixing lifetime of "<<anisotope<<std::endl;
-			FixLifetime(afunc,anisotope);
-		} else {
-			// for amplitudes / background constant we'll set the lower limit to be 0.
-			// This seems to be necessary for some fits otherwise
-			// ROOT gives negative amounts of some isotopes.
-			//afunc.SetParLimits(next_par.second, 0, 1E9); // FIXME what to use as upper limit????
-			// strictly i think we ought to give initial fit values,
-			// but thankfully MINUIT manages without them, but it doesn't like having
-			// (default) initial values at the limit, so set some small amount
-			//afunc.SetParameter(next_par.second,10);
-		}
-	}
-	
-	// return the built function
-	return afunc;
-}
-
-// this is the hack
-TF1 FitSpallationDt::BuildFunction(std::vector<std::string> isotopes, double func_min, double func_max){
-	std::string total_func="";
-	std::string func_name="";
-	std::map<std::string,int> parameter_posns;
-	int next_par_index=0;
-	for(std::string& anisotope : isotopes){
-		func_name += anisotope+"_";
-		std::cout<<"adding isotope "<<anisotope<<std::endl;
-		// first, this 'isotope' may be a degenerate pair, so try to split it apart
-		if(anisotope.find("_")==std::string::npos){
-			// not a pair
-			std::cout<<"not a pair"<<std::endl;
-			int first_index=next_par_index;
-			
-			// get paper amplitude, corrected for energy efficiency and scaled by config file scaling
-			double paperval = GetPaperAmp(anisotope,true,paper_scaling);
-			std::string paperstring = std::to_string(paperval/2.); // fix half the paper val, fit the rest
-			// "((x.xx + abs([0]))/[1])*exp(-x/[1])"
-			std::string scalestring = "0.006*";
-			std::string this_func =  scalestring+"(("+paperstring+"+abs(["+toString(next_par_index)
-									+"]))/["+toString(next_par_index+1)
-									+"])*exp(-x/["+toString(next_par_index+1)+"])";
-			next_par_index +=2;
-			// add this function to the total function string
-			total_func = (total_func=="") ? this_func : total_func+" + "+this_func;
-			// add the parameter names to our map
-			parameter_posns.emplace("amp_"+anisotope,first_index);
-			parameter_posns.emplace("lifetime_"+anisotope,first_index+1);
-		} else {
-			// it's a pair. For now, only support two isotopes at a time.
-			std::cout<<"a pair, splitting into ";
-			std::string first_isotope = anisotope.substr(0,anisotope.find_first_of("_"));
-			std::string second_isotope = anisotope.substr(anisotope.find_first_of("_")+1,std::string::npos);
-			std::cout<<first_isotope<<" and "<<second_isotope<<std::endl;
-			// the fit function isn't just the sum of two single isotope functions
-			// as they share an amplitude and constant
-			//"(x.xx + abs([0]))*0.5*(exp(-x/[1])/[1]+exp(-x/[2])/[2])
-			int first_index=next_par_index;
-			
-			// get paper amplitude, corrected for energy efficiency and scaled by config file scaling
-			std::cout<<"getting paper amp"<<std::endl;
-			double paperval = GetPaperAmp(anisotope,true,paper_scaling);
-			std::cout<<"paperval= "<<paperval<<std::endl;
-			
-			// fix the abundance to at least half the paper val, fit the rest
-			std::string paperstring = std::to_string(paperval/2.);
-			std::string scalestring = "0.006*";
-			std::string this_func =  scalestring+"("+paperstring+"+abs(["+toString(next_par_index)+"]))*0.5*"
-									+"(exp(-x/["+toString(next_par_index+1)+"])/" // don't increment index
-									+"["+toString(next_par_index+1)+"]+"
-									+"exp(-x/["+toString(next_par_index+2)+"])/"  // don't increment index
-									+"["+toString(next_par_index+2)+"])";
-			next_par_index += 3;
-			// add this function to the total function string
-			total_func = (total_func=="") ? this_func : total_func+" + "+this_func;
-			// add the parameter names to our map
-			parameter_posns.emplace("amp_"+anisotope,first_index++);
-			parameter_posns.emplace("lifetime_"+first_isotope,first_index++);
-			parameter_posns.emplace("lifetime_"+second_isotope,first_index);
-		}
-	}
-	// add the constant term
-	total_func += " + abs(["+toString(next_par_index)+"])";
-	parameter_posns.emplace("const",next_par_index);
-	
-	// build the total function from the sum of all strings
-	func_name.pop_back(); // remove trailing '_'
-	TF1 afunc(func_name.c_str(),total_func.c_str(),func_min,func_max);
-	
-	// OK, propagate parameter names to the function
-	for(auto&& next_par : parameter_posns){
-		std::cout<<"settin parname "<<next_par.second<<" to "<<next_par.first<<std::endl;
-		afunc.SetParName(next_par.second,next_par.first.c_str());
-		if(next_par.first.substr(0,9)=="lifetime_"){
-			std::string anisotope = next_par.first.substr(9,std::string::npos);
-			std::cout<<"fixing lifetime of "<<anisotope<<std::endl;
-			FixLifetime(afunc,anisotope);
-		} else {
-			// for amplitudes / background constant we'll set the lower limit to be 0.
-			// This seems to be necessary for some fits otherwise
-			// ROOT gives negative amounts of some isotopes.
-			//afunc.SetParLimits(next_par.second, 0, 1E9); // FIXME what to use as upper limit????
-			// strictly i think we ought to give initial fit values,
-			// but thankfully MINUIT manages without them, but it doesn't like having
-			// (default) initial values at the limit, so set some small amount
-			//afunc.SetParameter(next_par.second,10);
-		}
-	}
-	
-	// return the built function
-	return afunc;
-}
-
-// fix lifetime of TF1 based on isotope name
-void FitSpallationDt::FixLifetime(TF1& func, std::string isotope){
-	int par_number = func.GetParNumber(("lifetime_"+isotope).c_str());
-	func.FixParameter(par_number,lifetimes.at(isotope));
-}
-
-// copy fit result amplitude value back into a component TF1
-void FitSpallationDt::PushFitAmp(TF1& func, std::string isotope){
-//	std::cout<<"fixing fit result for func "<<func.GetName()<<", isotope "<<isotope<<std::endl;
-//	std::cout<<"available pars are: "<<std::endl;
-//	for(int i=0; i<func.GetNpar(); ++i){
-//		std::cout<<i<<"="<<func.GetParName(i)<<std::endl;
-//	}
-//	int par_number = func.GetParNumber(("amp_"+isotope).c_str()); // can do straight by name
-	double v = static_cast<double>(func.GetParameter(("amp_"+isotope).c_str()));
-	std::cout<<"amp of "<<isotope<<" was "<<v<<std::endl;
-	fit_amps[isotope] = func.GetParameter(("amp_"+isotope).c_str());
-}
-
-// copy fit result amplitude value back into a component TF1
-void FitSpallationDt::PushFitAmp(double amp, std::string isotope){
-	fit_amps[isotope] = amp;
-}
-
-// copy amplitude value from a component TF1 into a sum function for fitting
-void FitSpallationDt::PullFitAmp(TF1& func, std::string isotope, bool fix){
-	std::string parname = (isotope.substr(0,5)=="const") ? "const" : "amp_"+isotope;
-	int par_number = func.GetParNumber(parname.c_str());
-	if(fix){
-		func.FixParameter(par_number,fit_amps.at(isotope));
-	} else {
-		func.SetParameter(par_number,fit_amps.at(isotope));
-	}
-}
-
-double FitSpallationDt::GetPaperAmp(std::string isotope, bool threshold_scaling, double fixed_scaling){
-	std::cout<<"getting paper amp for isotope "<<isotope<<std::endl;
-	double paperval;
-	if(isotope!="const"){
-		// the values in papervals are rates in events / kton / day, integrated over all beta energies.
-		// To obtain Ni, the initial number of observable events over our live time,
-		// we need to multiply by the livetime, the fiducial volume, and the efficiency of observation
-		// (i.e. total efficiency all cuts)
-		// Everything except the low energy cut is isotope independent.
-		// the efficiency of the energy cut we need to look up for each isotope
-		// The threshold_scaling bool defines whether we use the 6MeV efficiency from the paper,
-		// or an 8MeV efficiency from FLUKA + skdetsim. For the same livetime this would give the number
-		// of events we would expect to see with a higher E threshold so that we can compare.
-		double energy_cut_eff = 1.;
-		if(isotope.find("_")==std::string::npos){
-			// not a pairing - can look up efficiency directly
-			if(threshold_scaling){
-				energy_cut_eff = reco_effs_8mev.at(isotope);
-			} else {
-				energy_cut_eff = papereffs.at(isotope);
-				std::cout<<" 6MeV cut efficiency is "<<energy_cut_eff<<std::endl;
-			}
-			paperval = papervals.at(isotope);
-		} else {
-			std::string first_isotope = isotope.substr(0,isotope.find_first_of("_"));
-			std::string second_isotope = isotope.substr(isotope.find_first_of("_")+1,std::string::npos);
-			// how do we handle efficiency for pairs?
-			// best we can do is assume half for each and average the efficiency i think....
-			if(threshold_scaling){
-				energy_cut_eff = 0.5*(reco_effs_8mev.at(first_isotope) + reco_effs_8mev.at(second_isotope));
-			} else {
-				energy_cut_eff = 0.5*(papereffs.at(first_isotope) + papereffs.at(second_isotope));
-			}
-			// for a pair of isotopes we may have one or both
-			if(papervals.count(isotope)){
-				// if we have a combined amplitude, use that
-				paperval = papervals.at(isotope);
-			} else {
-				// otherwise take the sum
-				double paperval1 = papervals.at(first_isotope);
-				double paperval2 = papervals.at(second_isotope);
-				paperval = (paperval1+paperval2);
-			}
-		}
-		// ok, convert Ri to Ni
-		paperval *= fiducial_vol * paper_livetime * (paper_first_reduction_eff/100.)
-					 * (paper_dlt_cut_eff/100.) * (energy_cut_eff/100.);
-		std::cout<<"paper Ni is "<<paperval<<std::endl;
-	} else {
-		// the constant term isn't a rate, it's read straight off the plot so doesn't need conversion.
-		// But, if we're comparing across energy thresholds, it should also be scaled
-		// down by the relative rate of random backgrounds above 8MeV vs above 6MeV
-		// TODO obtain that number...
-		paperval = papervals.at(isotope); // for now just use the value read off the plot, no scaling
-	}
-	
-	paperval *= fixed_scaling; // superfluous, just in case
-	return paperval;
-}
-
-void FitSpallationDt::PullPaperAmp(TF1& func, std::string isotope, bool threshold_scaling, double fixed_scaling){
-	double paperval = GetPaperAmp(isotope, threshold_scaling, fixed_scaling);
-	std::string parname = (isotope=="const") ? "const" : "amp_"+isotope;
-	func.SetParameter(parname.c_str(), paperval);
-}
-
 // =========================================================================
 // =========================================================================
+
+// A function to retrieve the selection efficiency of a 6 or 8 MeV reconstructed energy cut
+// for each isotope, based on FLUKA + skdetsim simulations
 
 bool FitSpallationDt::GetEnergyCutEfficiencies(){
 	// 2015 paper had a low threshold of 6MeV, newer data has (as of now) 8MeV

@@ -6,13 +6,15 @@
 #include <iostream>
 
 #include "Tool.h"
-#include "MTreeReader.h"
+#include "basic_array.h"
 #include "SkrootHeaders.h" // MCInfo, Header etc.
 
 #include "ColourWheel.h"
 
-class TH1F;
+class TH1;
 class TF1;
+class MTreeReader;
+class MTreeSelection;
 
 /**
 * \class FitSpallationDt
@@ -34,13 +36,13 @@ class FitSpallationDt: public Tool {
 	private:
 	// functions
 	// =========
-	int ReadEntry(long entry_number);
-	int GetBranches();
 	bool Analyse();
-	int DisableUnusedBranches();
+	bool GetBranchValues();
+	bool Analyse_Laura();
+	bool GetBranchValuesLaura();
 	bool GetEnergyCutEfficiencies();
 	bool PlotSpallationDt();
-	bool FitDtDistribution(TH1F& dt_mu_lowe_hist_short, TH1F& dt_mu_lowe_hist_log, int rangenum);
+	bool FitDtDistribution(TH1& dt_mu_lowe_hist_short, int rangenum);
 	// helper functions used in FitSpallationDt
 	std::vector<double> MakeLogBins(double xmin, double xmax, int nbins);
 	void FixLifetime(TF1& func, std::string isotope);
@@ -51,23 +53,37 @@ class FitSpallationDt: public Tool {
 	double GetPaperAmp(std::string isotope, bool threshold_scaling, double fixed_scaling);
 	void BuildPaperPlot();
 	TF1 BuildFunction(std::vector<std::string> isotopes, double func_min=0, double func_max=30);
-	TF1 BuildFunction2(std::vector<std::string> isotopes, double func_min=0, double func_max=30);
+	TF1 BuildFunctionHack(std::vector<std::string> isotopes, double func_min=0, double func_max=30);
+	TF1 BuildFunctionNoHack(std::vector<std::string> isotopes, double func_min=0, double func_max=30);
 	
 	// tool variables
 	// ==============
 	std::string toolName;
 	std::string outputFile="";
-	std::string inputFile;
-	std::string treeName;
-	int maxEvents;
+	std::string valuesFileMode="";
+	std::string valuesFile="";
 	double paper_scaling = 1.;
+	bool useHack=false;
 	std::string efficienciesFile="FlukaBetaEfficiencies.bs";    // BoostStore of efficiencies of energy thresholds
 	
-	MTreeReader myTreeReader; // the TTree reader
-	int entrynum=0;
-	float dt;                // this is the only variable we need to read
-	std::vector<float> my_dt_mu_lowe_vals;
-	double livetime=1;
+	std::string treeReaderName;
+	MTreeReader* myTreeReader=nullptr; // the TTree reader
+	MTreeSelection* myTreeSelections=nullptr;
+	
+	int run_min=1;
+	int run_max=9999999;
+	
+	std::vector<float> dt_mu_lowe_vals;  // data to fit
+	double livetime=0;
+	double binwidth;
+	std::string hist_to_fit="log";
+	std::string laurasfile="";
+	bool fix_const=false;
+	bool use_par_limits=false;
+	bool split_iso_pairs=false;
+	int n_dt_bins=5000;
+	int binning_type=0;
+	bool random_subtract=false;
 	
 	// energy threshold comparison
 	// ===========================
@@ -94,6 +110,16 @@ class FitSpallationDt: public Tool {
 	
 	// variables to read in
 	// ====================
+	// for nominal processing all we need is the array of times between muon and lowe event [seconds]
+	basic_array<float*> dt_mu_lowe;
+	// when fitting data from laura's file, each mu-lowe pair is a single TTree entry (not an array)
+	// and we may apply additional cuts to ensure the same dataset is being fit.
+	int muboy_status;
+	float dt;
+	float lt;
+	float energy_relic;
+	float bsgood_relic;
+	int nrunsk;
 	
 	// variables to write out
 	// ======================
