@@ -5,6 +5,7 @@
 #include "Algorithms.h"
 #include "Constants.h"
 #include "type_name_as_string.h"
+#include "MTreeSelection.h"
 
 TreeReader::TreeReader():Tool(){
 	// get the name of the tool from its class name
@@ -45,6 +46,25 @@ bool TreeReader::Initialise(std::string configfile, DataModel &data){
 	Log(toolName+" registering tree reader "+readerName,v_debug,verbosity);
 	m_data->Trees.emplace(readerName,&myTreeReader);
 	
+	// if we were given a selections file, only read entries that pass the specified cut
+	if(selectionsFile!=""){
+		// make the MTreeSelection to read the TEntryList file
+		myTreeSelections = new MTreeSelection(selectionsFile);
+		m_data->Selectors.emplace(readerName,myTreeSelections);
+		
+		if(cutName=="") cutName = myTreeSelections->GetTopCut();
+		Log(toolName+" reading only entries passing cut "+cutName
+			+" in selections file "+selectionsFile,v_debug,verbosity);
+		
+		// scan to the first entry passing our specified cut
+		Log(toolName+" scanning to first passing entry",v_debug,verbosity);
+		do {
+			entrynum = myTreeSelections->GetNextEntry(cutName);
+		} while(entrynum<firstEntry);
+		Log(toolName+" reading from entry "+toString(entrynum),v_debug,verbosity);
+	}
+	
+	
 	return true;
 }
 
@@ -58,7 +78,11 @@ bool TreeReader::Execute(){
 	
 	// check if we've hit the user-requested entry limit
 	// or if this is the last entry, in which case set StopLoop
-	entrynum++;
+	if(myTreeSelections==nullptr){
+		entrynum++;
+	} else {
+		entrynum = myTreeSelections->GetNextEntry(cutName);
+	}
 	if((maxEntries>0)&&(entrynum>=(maxEntries+firstEntry))){
 		Log(toolName+" hit max events, setting StopLoop",v_message,verbosity);
 		m_data->vars.Set("StopLoop",1);
@@ -77,6 +101,7 @@ bool TreeReader::Execute(){
 
 bool TreeReader::Finalise(){
 	
+	if(myTreeSelections) delete myTreeSelections;
 	return true;
 }
 
@@ -151,6 +176,8 @@ int TreeReader::LoadConfig(std::string configfile){
 		else if(thekey=="readerName") readerName = thevalue;
 		else if(thekey=="firstEntry") firstEntry = stoi(thevalue);
 		else if(thekey=="maxEntries") maxEntries = stoi(thevalue);
+		else if(thekey=="selectionsFile") selectionsFile = thevalue;
+		else if(thekey=="cutName") cutName = thevalue;
 		else {
 			Log(toolName+" error parsing config file line: \""+LineCopy
 				+"\" - unrecognised variable \""+thekey+"\"",v_error,verbosity);

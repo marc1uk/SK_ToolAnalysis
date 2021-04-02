@@ -590,6 +590,10 @@ MTreeReader* MTreeSelection::GetTreeReader(){
 	return treereader;
 }
 
+std::string MTreeSelection::GetTopCut(){
+	return ((cut_order.size()==0) ? "" : cut_order.front());
+}
+
 std::string MTreeSelection::BranchAddressToName(intptr_t branchptr){
 	if(branch_addresses.count(branchptr)==0){
 		std::string indexbranch="";

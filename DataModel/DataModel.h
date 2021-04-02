@@ -12,7 +12,9 @@
 #include "BoostStore.h"
 #include "Logging.h"
 #include "Utilities.h"
-#include "MTreeReader.h"
+
+class MTreeReader;
+class MTreeSelection;
 
 #include <zmq.hpp>
 
@@ -45,6 +47,7 @@ class DataModel {
   BoostStore CStore; ///< This is a more efficent binary BoostStore that can be used to store a dynamic set of inter Tool variables.
   std::map<std::string,BoostStore*> Stores; ///< This is a map of named BooStore pointers which can be deffined to hold a nammed collection of any tipe of BoostStore. It is usefull to store data that needs subdividing into differnt stores.
   std::map<std::string,MTreeReader*> Trees; ///< A map of MTreeReader pointers, used to read ROOT trees
+  std::map<std::string,MTreeSelection*> Selectors; ///< A map of MTreeSelection pointers used to read event selections
   
   Logging *Log; ///< Log class pointer for use in Tools, it can be used to send messages which can have multiple error levels and destination end points  
 

@@ -82,6 +82,7 @@ class MTreeSelection : public SerialisableObject {
 	std::set<size_t> GetPassingIndexes(std::string cutname);
 	std::set<std::vector<size_t>> GetPassingIndices(std::string cutname);
 	MTreeReader* GetTreeReader();
+	std::string GetTopCut();
 	
 	private:
 	std::vector<std::string> FindLinkedBranches(std::string cut_branch);

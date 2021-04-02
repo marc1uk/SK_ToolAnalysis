@@ -36,6 +36,8 @@ class TreeReader: public Tool {
 	// ==============
 	std::string toolName;
 	std::string inputFile;
+	std::string selectionsFile="";
+	std::string cutName="";
 	std::string treeName;
 	std::string readerName;
 	int maxEntries=-1;
@@ -53,7 +55,8 @@ class TreeReader: public Tool {
 	
 	// variables to read in
 	// ====================
-	MTreeReader myTreeReader; // the TTree reader
+	MTreeReader myTreeReader;                  // the TTree reader
+	MTreeSelection* myTreeSelections=nullptr;  // a set of entries one or more cuts
 	std::vector<std::string> ActiveBranches;
 	
 };
