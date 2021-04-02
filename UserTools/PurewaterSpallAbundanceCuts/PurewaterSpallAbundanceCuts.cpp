@@ -48,6 +48,8 @@ bool PurewaterSpallAbundanceCuts::Initialise(std::string configfile, DataModel &
 	// Set up the tree selector to operate on entries in this tree
 	myTreeSelections.SetTreeReader(myTreeReader);
 	myTreeSelections.MakeOutputFile(outputFile);
+	// Set the tree selector so that downstream tools can check which events pass which cuts
+	m_data->Selectors.emplace(treeReaderName, &myTreeSelections);
 	
 	// Pre-populate event count tracker with all cuts to get the ordering of reduction right.
 	// FIXME find a better way. Maybe we should split lowe events // mu-lowe pairs // mu-lowe-ntag triplets,
@@ -101,10 +103,8 @@ bool PurewaterSpallAbundanceCuts::Initialise(std::string configfile, DataModel &
 
 bool PurewaterSpallAbundanceCuts::Execute(){
 	
-	entry_number = myTreeReader->GetEntryNumber();
-	if(entry_number<0) return true; // invalid entry number...
-	Log(toolName+" processing entry "+toString(entry_number),v_debug,verbosity);
-	GetBranchVariables();
+	// retrieve branch variables
+	GetBranchValues();
 	
 	// Apply event selections
 	Log(toolName+" applying cuts",v_debug,verbosity);
@@ -128,7 +128,7 @@ bool PurewaterSpallAbundanceCuts::Finalise(){
 	return true;
 }
 
-int PurewaterSpallAbundanceCuts::GetBranchVariables(){
+bool PurewaterSpallAbundanceCuts::GetBranchValues(){
 	
 	// retrieve variables from TTree to member variables
 	int success = 
@@ -138,7 +138,6 @@ int PurewaterSpallAbundanceCuts::GetBranchVariables(){
 	(myTreeReader->Get("np", num_neutron_candidates)) &&
 	(myTreeReader->Get("N200M", max_hits_200ns_AFT)) &&
 	(myTreeReader->Get("neutron5", ntag_FOM)) &&
-	(myTreeReader->Get("dt", dt_lowe_n)) &&
 	(myTreeReader->Get("nmusave_pre", num_pre_muons)) &&
 	(myTreeReader->Get("nmusave_post", num_post_muons)) &&
 	(myTreeReader->Get("mubstatus", mu_class)) &&
@@ -159,6 +158,7 @@ bool PurewaterSpallAbundanceCuts::Analyse(){
 	// Apply all cuts in sequence, noting which events pass each cut
 	
 	myTreeSelections.AddPassingEvent("all");
+	entry_number = myTreeReader->GetEntryNumber();
 	Log(toolName+" entry "+toString(entry_number)+" run "+toString(HEADER->nrunsk),v_debug,verbosity);
 	
 	Log(toolName+" checking run cut",v_debug+1,verbosity);
@@ -383,14 +383,14 @@ void PurewaterSpallAbundanceCuts::AddLastRunTime(){
 bool PurewaterSpallAbundanceCuts::apply_third_reduction(const ThirdRed *th, const LoweInfo *LOWE){
 	Log(toolName+" applying third reduction",v_debug,verbosity);
 	if (th->maxpre >= 12)             return true;                // remove events with high pre-activity
-	if (th->nmue > 0)                 return true;                // remove events ...with a muon...? how? XXX
+	if (th->nmue > 0)                 return true;                // remove events with a muon decay electron?
 	if (th->dwall < 200.)             return true;                // remove events within 2m from wall
 	if (th->effwall < 500.)           return true;                // remove events with back projection <5m to wall
 	if (th->pilike >= 0.36)           return true;                // remove pion-like events
 	if ((double)th->q50 / (double)(LOWE->bsn50) > 2) return true; // remove events with low signal-to-noise
 	if (th->angle<38 || th->angle>50) return true;                // remove events with Cherenkov angle != 42°
 	if (LOWE->bsenergy<8)             return true;                // remove events with energy < 8 MeV
-	if ( LOWE->bsgood[1] < 0.5 )      return true;                // remove events with ... poor vertex fit? XXX
+	if ( LOWE->bsgood[1] < 0.5 )      return true;                // remove events with poor vertex fit
 	if (th->ovaq < 0.25 )             return true;                // remove events poor event quality
 	return false;
 }

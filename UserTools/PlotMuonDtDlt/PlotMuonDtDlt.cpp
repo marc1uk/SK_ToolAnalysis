@@ -4,6 +4,8 @@
 #include "Algorithms.h"
 #include "Constants.h"
 #include "type_name_as_string.h"
+#include "MTreeReader.h"
+#include "MTreeSelection.h"
 
 #include "TROOT.h"
 #include "TFile.h"
@@ -33,16 +35,70 @@ bool PlotMuonDtDlt::Initialise(std::string configfile, DataModel &data){
 	// ------------------------------------
 	m_variables.Get("verbosity",verbosity);            // how verbose to be
 	m_variables.Get("outputFile",outputFile);          // where to save data. If empty, current TFile
+	m_variables.Get("treeReaderName",treeReaderName);
+	
+	myTreeReader = m_data->Trees.at(treeReaderName);
+	myTreeSelections = m_data->Selectors.at(treeReaderName);
 	
 	return true;
 }
-
 
 bool PlotMuonDtDlt::Execute(){
 	
+	// retrieve variables from TreeReader
+	GetBranchValues();
+	
+	// pre muons
+	// only consider first muboy muon (only for multi-mu events?)
+	std::set<size_t> pre_muboy_first_muons = myTreeSelections->GetPassingIndexes("pre_muon_muboy_i==0");
+	for(size_t mu_i : pre_muboy_first_muons){
+		Log(toolName+" filling spallation dt and dlt distributions",v_debug+2,verbosity);
+		dlt_vals_pre.at(mu_class[mu_i]).push_back(dlt_mu_lowe[mu_i]);   // FIXME weight by num_pre_muons
+		dt_vals_pre.at(mu_class[mu_i]).push_back(dt_mu_lowe[mu_i]);     // FIXME weight by num_pre_muons
+		
+		// to evaluate systematic on lt cut, apply various dt cuts and see how the lt cut efficiency varies
+		// since we're interested in the effect on the spallation sample, which is given by
+		// the total - post-muon sample, record both pre- and post- muon samples with various dt cuts
+		for(int dt_cut_i=0; dt_cut_i<num_dt_cuts; ++dt_cut_i){
+			Log(toolName+" checking nominal dlt cut systematic",v_debug+2,verbosity);
+			if(myTreeSelections->GetPassesCut("pre_mu_dt_cut_"+toString(dt_cut_i),mu_i)){
+				Log(toolName+" filling spallation dlt distribution for dt cut "
+				            +toString(dt_cut_i),v_debug+2,verbosity);
+				dlt_systematic_dt_cuts_pre.at(dt_cut_i).push_back(dt_mu_lowe[mu_i]);
+			}
+		}
+	}
+	// post muons
+	std::set<size_t> post_muboy_first_muons = myTreeSelections->GetPassingIndexes("post_muon_muboy_i==0");
+	for(size_t mu_i : post_muboy_first_muons){
+		Log(toolName+" filling spallation dt and dlt distributions",v_debug+2,verbosity);
+		dlt_vals_post.at(mu_class[mu_i]).push_back(dlt_mu_lowe[mu_i]);   // FIXME weight by num_post_muons
+		dt_vals_post.at(mu_class[mu_i]).push_back(dt_mu_lowe[mu_i]);     // FIXME weight by num_post_muons
+		
+		for(int dt_cut_i=0; dt_cut_i<num_dt_cuts; ++dt_cut_i){
+			Log(toolName+" checking nominal dlt cut systematic",v_debug+2,verbosity);
+			if(myTreeSelections->GetPassesCut("post_mu_dt_cut_"+toString(dt_cut_i),mu_i)){
+				Log(toolName+" filling spallation dlt distribution for dt cut "
+				            +toString(dt_cut_i),v_debug+2,verbosity);
+				dlt_systematic_dt_cuts_post.at(dt_cut_i).push_back(dt_mu_lowe[mu_i]);
+			}
+		}
+	}
+	// in Finalise we'll substract the two to get dt and dlt distributions for spallation only.
+	// we'll also compare across various dt cuts to get the systematic error on the spallation dlt cut.
+	
 	return true;
 }
 
+bool PlotMuonDtDlt::GetBranchValues(){
+	// retrieve variables from branches
+	bool success = 
+	(myTreeReader->Get("mubstatus", mu_class)) &&
+	(myTreeReader->Get("spadt", dt_mu_lowe)) &&
+	(myTreeReader->Get("spadlt", dlt_mu_lowe));
+	
+	return success;
+}
 
 bool PlotMuonDtDlt::Finalise(){
 	
@@ -64,6 +120,12 @@ bool PlotMuonDtDlt::Finalise(){
 	Log(toolName+" making plots of muon-lowe Dlt distributions",v_debug,verbosity);
 	PlotMuonDlt();
 	
+	// measure dlt cut systematic TODO
+//	MeasureDltSystematic(); // using variation in dlt_systematic_dt_cuts in bin corresponding to dlt=200cm
+	// for each entry in dlt_systematic_dt_cuts_pre, dlt_systematic_dt_cuts_post, subtract post from pre.
+	// this gives a set of efficiencies of spallation for varying dts.
+	// compare efficiency across various dts in each dlt bin to get the dlt systematic error.
+	
 	if(fout!=nullptr){
 		fout->Close();
 		delete fout;
@@ -73,22 +135,10 @@ bool PlotMuonDtDlt::Finalise(){
 	return true;
 }
 
-
-// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// =====================================================================
 // =====================================================================
 
 bool PlotMuonDtDlt::PlotMuonDlt(){
-	
-	
-	// retrieve Pre- and Post-Muon Dlt distributions from PurewaterLi9Plots
-	std::vector<std::vector<float>>* dlt_vals_pre;
-	std::vector<std::vector<float>>* dlt_vals_post;
-	get_ok = m_data->CStore.Get("dlt_vals_pre",dlt_vals_pre);
-	get_ok &= m_data->CStore.Get("dlt_vals_post",dlt_vals_post);
-	if(not get_ok){
-		Log(toolName+" Error! dlt_vals_pre or dlt_vals_post not in CStore!",v_error,verbosity);
-		return true;
-	}
 	
 	THStack my_spall_dlts;
 	// make histograms of transverse distance to muon for all pre- and post-muons
@@ -98,12 +148,12 @@ bool PlotMuonDtDlt::PlotMuonDlt(){
 		const char* mu_class_name = aclass.second.c_str();
 		TH1F ahist_pre(TString::Format("dlt_pre_%d",mu_class_i),
 					     "All Pre-Muon to Low-E Transverse Distances",8,0,400);
-		for(auto&& aval : dlt_vals_pre->at(mu_class_i)) ahist_pre.Fill(aval);
+		for(auto&& aval : dlt_vals_pre.at(mu_class_i)) ahist_pre.Fill(aval);
 		ahist_pre.Write();
 		
 		TH1F ahist_post(TString::Format("dlt_post_%d",mu_class_i),
 					     "All Post-Muon to Low-E Transverse Distances",8,0,400);
-		for(auto&& aval : dlt_vals_post->at(mu_class_i)) ahist_post.Fill(aval);
+		for(auto&& aval : dlt_vals_post.at(mu_class_i)) ahist_post.Fill(aval);
 		ahist_post.Write();
 		
 		TH1F* dlt_hist_spall = (TH1F*)ahist_pre.Clone(TString::Format("dlt_spall_%s",mu_class_name));
@@ -131,22 +181,12 @@ bool PlotMuonDtDlt::PlotMuonDlt(){
 	return true;
 }
 
-// ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+// =====================================================================
 // =====================================================================
 
 bool PlotMuonDtDlt::PlotMuonDt(){
 	// make histograms of time difference to muon for all pre- and post-muons
 	// and their difference to extract spallation distributions.
-	
-	// retrieve Pre- and Post-Muon Dt distributions from PurewaterLi9Plots
-	std::vector<std::vector<float>>* dt_vals_pre;
-	std::vector<std::vector<float>>* dt_vals_post;
-	get_ok = m_data->CStore.Get("dt_vals_pre",dt_vals_pre);
-	get_ok &= m_data->CStore.Get("dt_vals_post",dt_vals_post);
-	if(not get_ok){
-		Log(toolName+" Error! dt_vals_pre or dt_vals_post not in CStore!",v_error,verbosity);
-		return true;
-	}
 	
 	// colour match to the existing paper
 	// muboy_classes{ misfit=0, single_thru_going=1, single_stopping=2, multiple_mu=3, also_multiple_mu=4, corner_clipper=5};
@@ -170,12 +210,12 @@ bool PlotMuonDtDlt::PlotMuonDt(){
 			// in order to be able to subtract the bin counts.
 			TH1F ahist_pre(TString::Format("dt_pre_%d_%0.2f",mu_class_i,dt_max),
 							 "All Pre-Muon to Low-E Time Differences",10,0,dt_max);
-			for(auto&& aval : dt_vals_pre->at(mu_class_i)) ahist_pre.Fill(fabs(aval));
+			for(auto&& aval : dt_vals_pre.at(mu_class_i)) ahist_pre.Fill(fabs(aval));
 			ahist_pre.Write();
 			
 			TH1F ahist_post(TString::Format("dt_post_%d_%0.2f",mu_class_i,dt_max),
 							 "All Post Muon to Low-E Time Differences",10,0,dt_max);
-			for(auto&& aval : dt_vals_post->at(mu_class_i)) ahist_post.Fill(aval);
+			for(auto&& aval : dt_vals_post.at(mu_class_i)) ahist_post.Fill(aval);
 			ahist_post.Write();
 			
 			TH1F* dt_hist_spall = 

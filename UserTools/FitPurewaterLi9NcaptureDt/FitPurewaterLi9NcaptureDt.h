@@ -6,10 +6,12 @@
 #include <iostream>
 
 #include "Tool.h"
-#include "MTreeReader.h"
 #include "SkrootHeaders.h" // MCInfo, Header etc.
+#include "basic_array.h"
 
 class TH1F;
+class MTreeReader;
+class MTreeSelection;
 
 /**
 * \class FitPurewaterLi9NcaptureDt
@@ -31,6 +33,7 @@ class FitPurewaterLi9NcaptureDt: public Tool {
 	private:
 	// functions
 	// =========
+	bool GetBranchValues();
 	bool PlotNcaptureDt();
 	double BinnedNcapDtChi2Fit(TH1F* li9_ncap_dt_hist);
 	bool UnbinnedNcapDtLogLikeFit(TH1F* li9_ncap_dt_hist, double num_li9_events);
@@ -39,10 +42,13 @@ class FitPurewaterLi9NcaptureDt: public Tool {
 	// tool variables
 	// ==============
 	std::string toolName;
-	std::vector<float>* li9_ntag_dt_vals=nullptr;
+	std::vector<float> li9_ntag_dt_vals;
 	std::string outputFile="";
 	float ncap_dtmin;                 // range of dt_mu_ncap values to accept
 	float ncap_dtmax;                 // for Li9 abundance extraction, **microseconds**
+	std::string treeReaderName;
+	MTreeReader* myTreeReader=nullptr;
+	MTreeSelection* myTreeSelections=nullptr;
 	
 	// verbosity levels: if 'verbosity' < this level, the message type will be logged.
 	int verbosity=1;
@@ -55,6 +61,8 @@ class FitPurewaterLi9NcaptureDt: public Tool {
 	
 	// variables to read in
 	// ====================
+	int num_neutron_candidates;                      // num pulses: i.e. num neutrons in AFT window
+	basic_array<float*> dt_lowe_n;                   // dt positron->neutron
 	
 	// variables to write out
 	// ======================

@@ -52,8 +52,8 @@ class PurewaterSpallAbundanceCuts: public Tool {
 	
 	// functions
 	// =========
-	int GetBranchVariables();    // retrieve tree branches
-	bool Analyse();              // main body
+	bool GetBranchValues();           // retrieve tree branches
+	bool Analyse();                   // main body
 	bool apply_third_reduction(const ThirdRed *th, const LoweInfo *LOWE);
 	
 	// variables to read in

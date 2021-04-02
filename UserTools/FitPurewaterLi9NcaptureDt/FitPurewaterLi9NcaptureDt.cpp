@@ -4,6 +4,8 @@
 #include "Algorithms.h"
 #include "Constants.h"
 #include "type_name_as_string.h"
+#include "MTreeReader.h"
+#include "MTreeSelection.h"
 
 #include "TROOT.h"
 #include "TFile.h"
@@ -45,16 +47,52 @@ bool FitPurewaterLi9NcaptureDt::Initialise(std::string configfile, DataModel &da
 	m_variables.Get("outputFile",outputFile);          // where to save data. If empty, current TFile
 	m_variables.Get("li9_ncapture_dtmin",ncap_dtmin);
 	m_variables.Get("li9_ncapture_dtmax",ncap_dtmax);
+	m_variables.Get("treeReaderName",treeReaderName);
+	
+	myTreeReader = m_data->Trees.at(treeReaderName);
+	myTreeSelections = m_data->Selectors.at(treeReaderName);
 	
 	return true;
 }
-
 
 bool FitPurewaterLi9NcaptureDt::Execute(){
 	
+	// retrieve variables from TreeReader
+	GetBranchValues();
+	
+	// the following cuts are based on muon-lowe pair variables, so loop over muon-lowe pairs
+	std::set<size_t> spall_mu_indices = myTreeSelections->GetPassingIndexes("dlt_mu_lowe>200cm");
+	Log(toolName+" Looping over "+toString(spall_mu_indices.size())
+				+" preceding muons to look for spallation events",v_debug,verbosity);
+	for(size_t mu_i : spall_mu_indices){
+		// now check whether this passed the additional Li9 cuts
+		if(not myTreeSelections->GetPassesCut("ntag_FOM>0.995")) continue;
+		// plot distribution of beta->ntag dt from passing triplets, compare to fig 5
+		// Zhang had no events with >1 ntag candidate: should we only take the first? XXX
+		for(size_t neutron_i=0; neutron_i<num_neutron_candidates; ++neutron_i){
+			if(myTreeSelections->GetPassesCut("mu_lowe_ntag_triplets",{mu_i, neutron_i})){
+				double ncap_time = dt_lowe_n[neutron_i];  // these times are in nanoseconds
+				// according to sonias code we need to account for some offset of the AFT trigger timestamps?
+				// "Remove 10mus time shift for AFT events and convert time to microseconds"
+				// doesn't seem to tie up with what this is actually doing, though
+				// adjusted too instead convert presumably ms, to seconds for consistency
+				double ncap_time_adjusted = ncap_time < 50000 ? ncap_time : ncap_time - 65000;
+				li9_ntag_dt_vals.push_back(ncap_time_adjusted/1E9);
+			}
+		}
+	} // end loop over muons
+	
 	return true;
 }
 
+bool FitPurewaterLi9NcaptureDt::GetBranchValues(){
+	// retrieve variables from branches
+	bool success = 
+	(myTreeReader->Get("np", num_neutron_candidates)) &&
+	(myTreeReader->Get("dt", dt_lowe_n));
+	
+	return success;
+}
 
 bool FitPurewaterLi9NcaptureDt::Finalise(){
 	
@@ -87,14 +125,6 @@ bool FitPurewaterLi9NcaptureDt::Finalise(){
 // =========================================================================
 
 bool FitPurewaterLi9NcaptureDt::PlotNcaptureDt(){
-	// events passing dlt cut, li9 energy and lifetime cuts, and with a tagged neutron passing BDT cut
-	
-	// get the data from the CStore
-	get_ok = m_data->CStore.Get("li9_ntag_dt_vals",li9_ntag_dt_vals);
-	if(not get_ok){
-		Log(toolName+" Error! No li9_ntag_dt_vals in CStore!",v_error,verbosity);
-		return true;
-	}
 	
 	// make a histogram to bin the data
 	std::cout<<"making li9 lowe-ncapture dt histogram"<<std::endl;
@@ -105,7 +135,7 @@ bool FitPurewaterLi9NcaptureDt::PlotNcaptureDt(){
 	// there's no data beyond 500us. What's going on?
 	std::cout<<"first 100 ncapture times were: {";
 	int ncpi=0;
-	for(auto&& aval : (*li9_ntag_dt_vals)){
+	for(auto&& aval : li9_ntag_dt_vals){
 		// XXX FIXME REMOVE AFTER REPROCESSING IN ANALYSE XXX XXX XXX XXX XXX XXX 
 		double ncap_time_adjusted = aval < 50000 ? aval : aval - 65000;
 		ncap_time_adjusted /= 1E9;
@@ -190,7 +220,7 @@ double FitPurewaterLi9NcaptureDt::BinnedNcapDtChi2Fit(TH1F* li9_ncap_dt_hist){
 
 bool FitPurewaterLi9NcaptureDt::UnbinnedNcapDtLogLikeFit(TH1F* li9_ncap_dt_hist, double num_li9_events){
 	
-	std::cout<<"doing unbinned likelihood fit with "<<li9_ntag_dt_vals->size()<<" values"<<std::endl;
+	std::cout<<"doing unbinned likelihood fit with "<<li9_ntag_dt_vals.size()<<" values"<<std::endl;
 	
 	// TF1 of likelihood distribution
 	// ROOT provides some basic pdfs: https://root.cern.ch/doc/v610/group__PdfFunc.html
@@ -213,8 +243,8 @@ bool FitPurewaterLi9NcaptureDt::UnbinnedNcapDtLogLikeFit(TH1F* li9_ncap_dt_hist,
 	//ncapture_dt_unbinned_like.SetParameters(allparams.data());  // pass an array or set individually
 	// set starting values to fit val from binned fit
 	std::cout<<"setting starting value of background fraction to "
-			 <<(1.-(num_li9_events/li9_ntag_dt_vals->size()))<<std::endl;
-	ncapture_dt_unbinned_like.SetParameter(0,(1.-(num_li9_events/li9_ntag_dt_vals->size())));
+			 <<(1.-(num_li9_events/li9_ntag_dt_vals.size()))<<std::endl;
+	ncapture_dt_unbinned_like.SetParameter(0,(1.-(num_li9_events/li9_ntag_dt_vals.size())));
 	
 	int nbins=10;
 	for(int i=nbins; i>0; --i){
@@ -300,8 +330,8 @@ bool FitPurewaterLi9NcaptureDt::UnbinnedNcapDtLogLikeFit(TH1F* li9_ncap_dt_hist,
 	
 	// convert the data into a suitable 'UnBinData' object
 	std::cout<<"making unbinned dataset"<<std::endl;
-	ROOT::Fit::UnBinData ncap_dt_data(li9_ntag_dt_vals->size());
-	for(auto aval : (*li9_ntag_dt_vals)){   // note: use auto NOT auto&&
+	ROOT::Fit::UnBinData ncap_dt_data(li9_ntag_dt_vals.size());
+	for(auto aval : li9_ntag_dt_vals){   // note: use auto NOT auto&&
 		ncap_dt_data.Add(aval);   // can we introduce weights here? FIXME
 	}
 	

@@ -4,6 +4,8 @@
 #include "Algorithms.h"
 #include "Constants.h"
 #include "type_name_as_string.h"
+#include "MTreeReader.h"
+#include "MTreeSelection.h"
 
 #include "TROOT.h"
 #include "TFile.h"
@@ -32,7 +34,8 @@ FitLi9Lifetime::FitLi9Lifetime():Tool(){
 }
 
 // from 2015 paper Table I
-constexpr double li9_lifetime_secs = 0.26;
+const double li9_lifetime_secs = 0.26;
+const double li9_endpoint = 14.5; // MeV
 
 bool FitLi9Lifetime::Initialise(std::string configfile, DataModel &data){
 	
@@ -49,6 +52,10 @@ bool FitLi9Lifetime::Initialise(std::string configfile, DataModel &data){
 	m_variables.Get("li9_lifetime_dtmin",li9_lifetime_dtmin);
 	m_variables.Get("li9_lifetime_dtmax",li9_lifetime_dtmax);
 	m_variables.Get("outputFile",outputFile);          // where to save data. If empty, current TFile
+	m_variables.Get("treeReaderName",treeReaderName);
+	
+	myTreeReader = m_data->Trees.at(treeReaderName);
+	myTreeSelections = m_data->Selectors.at(treeReaderName);
 	
 	return true;
 }
@@ -56,7 +63,34 @@ bool FitLi9Lifetime::Initialise(std::string configfile, DataModel &data){
 
 bool FitLi9Lifetime::Execute(){
 	
+	GetBranchValues();
+	
+	// the following cuts are based on muon-lowe pair variables, so loop over muon-lowe pairs
+	std::set<size_t> spall_mu_indices = myTreeSelections->GetPassingIndexes("dlt_mu_lowe>200cm");
+	Log(toolName+" Looping over "+toString(spall_mu_indices.size())
+				+" preceding muons to look for spallation events",v_debug,verbosity);
+	for(size_t mu_i : spall_mu_indices){
+		// check whether this passed the additional Li9 cuts
+		if(not myTreeSelections->GetPassesCut("ntag_FOM>0.995")) continue;
+		
+		// plot distribution of beta energies from passing triplets, compare to fig 4
+		Log(toolName+" filling li9 candidate distributions",v_debug+2,verbosity);
+		li9_e_vals.push_back(LOWE->bsenergy); // FIXME weight by num_post_muons
+		
+		// plot distirbution of mu->beta   dt from passing triplets, compare to fig 6
+		li9_muon_dt_vals.push_back(fabs(dt_mu_lowe[mu_i])); // FIXME weight by num_post_muons
+	}
+	
 	return true;
+}
+
+bool FitLi9Lifetime::GetBranchValues(){
+	// retrieve variables from branches
+	bool success = 
+	(myTreeReader->Get("LOWE", LOWE)) &&
+	(myTreeReader->Get("spadt", dt_mu_lowe));
+	
+	return success;
 }
 
 
@@ -77,6 +111,9 @@ bool FitLi9Lifetime::Finalise(){
 	Log(toolName+" making plot of Li9 candidates Dt distribution",v_debug,verbosity);
 	PlotLi9LifetimeDt();
 	
+	Log(toolName+" making plot of Li9 candidates beta energy distribution",v_debug,verbosity);
+	PlotLi9BetaEnergy();
+	
 	if(fout!=nullptr){
 		fout->Close();
 		delete fout;
@@ -92,20 +129,11 @@ bool FitLi9Lifetime::Finalise(){
 
 bool FitLi9Lifetime::PlotLi9LifetimeDt(){
 	
-	// get the data from the CStore
-	// distribution of muon->lowe times after Li9 cuts
-	std::vector<float>* li9_muon_dt_vals;
-	get_ok = m_data->CStore.Get("li9_muon_dt_vals",li9_muon_dt_vals);
-	if(not get_ok){
-		Log(toolName+" Error! li9_muon_dt_vals not in CStore!",v_error,verbosity);
-		return true;
-	}
-	
 	// make a histogram to bin the data
 	std::cout<<"making li9 mu-lowe dt histogram"<<std::endl;
 	TH1F li9_muon_dt_hist("li9_muon_dt_hist","Muon to Low-E dt for Li9 triplets",
 	                       15,li9_lifetime_dtmin,li9_lifetime_dtmax);
-	for(auto&& aval : (*li9_muon_dt_vals)){
+	for(auto&& aval : li9_muon_dt_vals){
 		li9_muon_dt_hist.Fill(aval);
 	}
 	std::cout<<"saving to file"<<std::endl;
@@ -220,4 +248,23 @@ double FitLi9Lifetime::BinnedLi9DtChi2Fit(TH1F* li9_muon_dt_hist){
 	
 	std::cout<<"li9 lifetime binned chi2 fit done"<<std::endl;
 	return li9_muon_dt_func.GetParameter(1);
+}
+
+// =========================================================================
+// Li9 energy spectrum fits
+// =========================================================================
+
+bool FitLi9Lifetime::PlotLi9BetaEnergy(){
+	
+	// plot the distribution to compare to paper Fig 4
+	TH1F li9_e_hist("li9_e_hist","Li9 Candidate Beta Energy",7,6,li9_endpoint);
+	// add rest mass as reconstructed energy is only kinetic...
+	double e_rest_mass = 0.511; // [MeV] TODO replace this with TParticleDatabase lookup
+	for(auto&& aval : li9_e_vals) li9_e_hist.Fill(aval+e_rest_mass); // FIXME weight by # post mus & num neutrons
+	li9_e_hist.Write();
+	
+	// to overlay the expected li9 and background plots, we need to take the beta spectra
+	// of each isotope and propagate it through the efficiency chain TODO
+	
+	return true;
 }
