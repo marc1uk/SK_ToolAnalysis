@@ -19,6 +19,7 @@ if (tool=="FitPurewaterLi9NcaptureDt") ret=new FitPurewaterLi9NcaptureDt;
 if (tool=="FitSpallationDt") ret=new FitSpallationDt;
 if (tool=="PurewaterSpallAbundanceCuts") ret=new PurewaterSpallAbundanceCuts;
 if (tool=="TreeReader") ret=new TreeReader;
+if (tool=="lf_allfit") ret=new lf_allfit;
 return ret;
 }
 

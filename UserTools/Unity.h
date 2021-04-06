@@ -13,3 +13,4 @@
 #include "FitSpallationDt.h"
 #include "TreeReader.h"
 #include "PurewaterSpallAbundanceCuts.h"
+#include "lf_allfit.h"
