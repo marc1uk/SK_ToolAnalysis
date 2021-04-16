@@ -1,7 +1,7 @@
 include $(SKOFL_ROOT)/config.gmk  # pulls in libskroot.so as well
 
 # user library paths
-LDFLAGS += -L/home/moflaher/skrootlibs -L/home/moflaher/stllibs -L/home/moflaher/relic_sk4_ana/relic_sk4_ana/data_reduc/third/lib
+LDFLAGS += -L${HOME}/skrootlibs -L${HOME}/stllibs -L${HOME}/relic_sk4_ana/relic_work_dir/data_reduc/third/lib
 # user libraries
 LOCAL_LIBS = -lRootStl -lthirdredvars
 
