@@ -1,3 +1,6 @@
+#ifndef COLOURWHEEL_H
+#define COLOURWHEEL_H
+
 #include <algorithm>
 #include <TColor.h>
 class ColourWheel{
@@ -67,4 +70,4 @@ class ColourWheel{
 	};
 };
 
-
+#endif

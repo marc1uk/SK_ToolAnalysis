@@ -13,7 +13,8 @@
 #include "TFile.h"
 class TTree;
 //class TFile;
-class BoostStore;
+//class BoostStore;
+class MTreeReader;
 
 //template<typename T>
 //std::pair<intptr_t, size_t> create_cut_pair(T branch, size_t index);

@@ -144,6 +144,7 @@ bool lf_allfit::Initialise(std::string configfile, DataModel &data){
 bool lf_allfit::Execute(){
 	
 	if((nread%10000)==0) std::cout<<"nrunsk/nread = "<<skhead_.nrunsk<<"/"<<nread<<std::endl;
+	++nread;
 	
 	// read input
 	int ierr;
