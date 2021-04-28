@@ -6,12 +6,13 @@ LDFLAGS += -L${HOME}/skrootlibs -L${HOME}/stllibs -L${HOME}/relic_sk4_ana/relic_
 LOCAL_LIBS = -lRootStl -lthirdredvars
 
 # lowe libraries - some of these may not be required in this list
-LDLIBS += -lbonsai_3.3 -lsklowe_7.0 -lwtlib_5.1 -lsollib_4.0 -lskrd -lsklib -lskroot -liolib -llibrary `cernlib graflib grafX11 packlib mathlib kernlib lapack3 blas`
+LDLIBS += -lbonsai_3.3 -lsklowe_7.0 -lwtlib_5.1 -lsollib_4.0 -lskrd -lsklib -lskroot -liolib -llibrary
+LDLIBS += `cernlib graflib grafX11 packlib mathlib kernlib lapack3 blas`
 
 LD_RUN_PATH=$(SKOFL_LIBDIR):$(A_LIBDIR)
 
 # C++ compiler flags - XXX config.gmk sets this already, so APPEND ONLY XXX
-CXXFLAGS    += -g -O3 -std=c++11 -fdiagnostics-color=always -Wno-reorder -Wno-sign-compare -Wno-unused-variable -Wno-unused-but-set-variable -Wl,--as-needed -Werror=array-bounds
+CXXFLAGS    += -g -O3 -std=c++11 -fdiagnostics-color=always -Wno-reorder -Wno-sign-compare -Wno-unused-variable -Wno-unused-but-set-variable -Werror=array-bounds
 #-D_GLIBCXX_DEBUG  << g++ debug mode. immediate segfault...
 
 # flags required for gprof profiling
@@ -42,10 +43,9 @@ MyToolsLib = $(LDFLAGS) $(LDLIBS)
 
 all: lib/libStore.so lib/libLogging.so lib/libDataModel.so include/Tool.h lib/libMyTools.so lib/libServiceDiscovery.so lib/libToolChain.so main RemoteControl  NodeDaemon
 
-main: src/main.cpp | lib/libMyTools.so lib/libStore.so lib/libLogging.so lib/libToolChain.so lib/libDataModel.so lib/libServiceDiscovery.so
+main: src/main.cpp | lib/libMyTools.so lib/libStore.so lib/libLogging.so lib/libToolChain.so lib/libDataModel.so lib/libServiceDiscovery.so lib/liblowfit_sk4_stripped.so
 	@echo -e "\n*************** Making " $@ "****************"
-	g++ $(CXXFLAGS) -g src/main.cpp -o main -I include -L lib -lStore -lMyTools -lToolChain -lDataModel -lLogging -lServiceDiscovery -lpthread $(DataModelInclude) $(DataModelib) $(MyToolsInclude)  $(MyToolsLib) $(ZMQLib) $(ZMQInclude)  $(BoostLib) $(BoostInclude)
-
+	g++ $(CXXFLAGS) -g -L lib -llowfit_sk4_stripped -I include $(DataModelInclude) $(BoostInclude) $(ZMQInclude) $(MyToolsInclude) src/main.cpp -o $@ $(BoostLib) $(DataModelib) $(MyToolsLib) $(ZMQLib) -L lib -lStore -lMyTools -lToolChain -lDataModel -lLogging -lServiceDiscovery -lpthread
 
 lib/libStore.so: $(ToolDAQPath)/ToolDAQFramework/src/Store/*
 	cd $(ToolDAQPath)/ToolDAQFramework && make lib/libStore.so
@@ -139,3 +139,11 @@ DataModel/%.o: DataModel/%.cpp lib/libLogging.so lib/libStore.so
 	@echo -e "\n*************** Making " $@ "****************"
 	cp $(shell dirname $<)/*.h include
 	-g++ $(CXXFLAGS) -c -fPIC -o $@ $< -I include -L lib -lStore -lLogging  $(DataModelInclude) $(DataModelLib) $(ZMQLib) $(ZMQInclude) $(BoostLib) $(BoostInclude)
+
+# this is the 'hack' library that must be linked into the final executable,
+# which together with certain orderings of arguments (place the library EARLY)
+# somehow avoids cernlib 64-bit address issues
+lib/liblowfit_sk4_stripped.so: DataModel/lowfit_sk4_stripped.cc DataModel/lowfit_sk4_stripped.h
+	@echo -e "\n*************** Making " $@ "****************"
+	-g++ $(CXXFLAGS) -shared -L${CERN_ROOT}/lib $< -o $@
+
