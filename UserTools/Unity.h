@@ -14,3 +14,4 @@
 #include "TreeReader.h"
 #include "PurewaterSpallAbundanceCuts.h"
 #include "lf_allfit.h"
+#include "TreeReaderDemo.h"

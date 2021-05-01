@@ -9,59 +9,8 @@
 #include <vector>
 #include <iostream>
 
-// (c-versions of) headers that define fortran common blocks
-// these are offficial in $SKOFL_ROOT/inc/
-#include "skheadC.h"
-#include "skparmC.h"
-#include "sktqC.h"
-#include "skbadcC.h"
-#include "geopmtC.h"
-//#include "skruninfC.h"  // commented out in original lowfit_sk4
-
-// these are from $SKOFL_ROOT/inc/lowe and have no official C version
-// the following two were done via automatic conversion done with fh2h
-#include "skdayC.h"
-#include "skwtC.h"
-// this last one was manually edited to reflect 'EQUIVALENCE' use (use with caution)
-#include "skroot_loweC.h"
-
-// header for skroot_* functions. These are actually C functions.
-#include "fortran_interface.h"
-
-// we need to declare all external fortran routines used here...
-// these were fine without any additional libraries being added to the makefile
-extern "C" void skroot_init_(int*);
-extern "C" void kzinit_();
-extern "C" void skoptn_(char*, int);
-extern "C" void skbadopt_(int*);
-extern "C" void geoset_();
-extern "C" void delete_outside_hits_();
-extern "C" void skcrawread_(int*, int*);
-extern "C" void skcread_(int*, int*);
-extern "C" void skroot_set_tree_(int*);
-
-// the following are provided by libwtlib_5.1.a
-extern "C" void skrunday_();
-extern "C" void skwt_gain_corr_();
-extern "C" void lfwater_(int*, float*);
-// skday_data_, common block
-
-// the following are provided by libbonsai_3.3.a
-extern "C" void cfbsinit_(int*, float*);
-extern "C" void cfbsexit_();
-
-// the following are provided by libsklowe_7.0.a
-extern "C" void lfclear_all_();
-extern "C" void lfallfit_sk4_final_qe43_(float*, int*, int*, int*, int*);
-// skroot_lowe_ common block
-
-// after that there were many undefined references, e.g. `sortzv_`, `hf1_`, `hf2_`...
-// after some trial and error these are resolved, but i lost track of which provided what.
-// cernlibs in particular resolved a lot of repeated undefined issues, they may be the main culprit.
-
-// ================================================================================================
-// START OF TOOL
-// ================================================================================================
+// declarations and #includes for SK fortran routines
+#include "fortran_routines.h"
 
 lf_allfit::lf_allfit():Tool(){
 	// get the name of the tool from its class name
@@ -83,8 +32,6 @@ bool lf_allfit::Initialise(std::string configfile, DataModel &data){
 	m_variables.Get("fname_in",fname_in);
 	m_variables.Get("fname_out",fname_out);
 	
-	// need to set skgeometry in skheadg common block
-	skheadg_.sk_geometry = 4;
 	lun = 10;  // TODO we should track these in ToolAnalysis to ensure uniqueness
 	
 	// set up branches we don't need to read on input or write out
@@ -114,20 +61,18 @@ bool lf_allfit::Initialise(std::string configfile, DataModel &data){
 	// skroot_init.F is mostly just a wrapper around skroot_initialize_,
 	// but also sets the variable `SK_FILE_FORMAT = 1` in common block /SKHEADF/
 	
-	// c***  read runinf (y/m/d, start time, end time, etc)
-	// c     call runinfsk
-	
 	// initialize data structure (zbs)
 	kzinit_();
 	std::string options = "31,30,26,25";
 	skoptn_(const_cast<char*>(options.c_str()), options.size());
 	int badopt = 23;
 	skbadopt_(&badopt);
+	// need to set skgeometry in skheadg common block
+	skheadg_.sk_geometry = 4;
 	geoset_();
 	
 	// initialize water transparency table
 	skrunday_();
-	// call skwt      // commented out in original lowfit_sk4
 	skwt_gain_corr_();
 	
 	// MAXPM is a #defined constant in tqrealroot.h, but we need to pass it by reference, so need a copy.
@@ -180,7 +125,7 @@ bool lf_allfit::Execute(){
 	
 	// once per run water transparency
 	if(skhead_.nrunsk!=nrunsk_last){
-		int days_to_run_start = skday_data_.relapse[skhead_.nrunsk]; // defined in skdayC.h
+		int days_to_run_start = skday_data_.relapse[skhead_.nrunsk];  // defined in skdayC.h
 		// function can be found at /usr/local/skofl/src/wtlib.obsolete/  to calculate watert
 		lfwater_(&days_to_run_start, &watert);
 		std::cout<<"nrunsk/watert = "<<skhead_.nrunsk<<"/"<<watert<<std::endl;
@@ -198,7 +143,6 @@ bool lf_allfit::Execute(){
 	/*
 	C         call lfallfit_sk4_data(watert, NHITCUT, lfflag)
 	C         call lfallfit_sk4_gain_corr(watert, NHITCUT, 0, log_level, lfflag)
-	          call lfallfit_sk4_final_qe43(watert, NHITCUT, 0, log_level, lfflag)
 	*/
 	lfallfit_sk4_final_qe43_(&watert, &NHITCUT, &flag_skip, &log_level, &lfflag);
 	
@@ -217,21 +161,21 @@ bool lf_allfit::Execute(){
 	// and can drop the trailing underscore
 	// (though we still need to make everything pointers)
 	// of course we're passing with fortan variables from common blocks...
-	skroot_set_lowe_(&lun, &skroot_lowe_.bsvertex[0], &skroot_lowe_.bsresult[0],
-	                &skroot_lowe_.bsdir[0], &skroot_lowe_.bsgood[0], &skroot_lowe_.bsdirks,
-	                &skroot_lowe_.bseffhit[0], &skroot_lowe_.bsenergy, &skroot_lowe_.bsn50,
-	                &skroot_lowe_.bscossun, &skroot_lowe_.clvertex[0], &skroot_lowe_.clresult[0],
-	                &skroot_lowe_.cldir[0], &skroot_lowe_.clgoodness, &skroot_lowe_.cldirks,
-	                &skroot_lowe_.cleffhit[0], &skroot_lowe_.clenergy, &skroot_lowe_.cln50,
-	                &skroot_lowe_.clcossun, &skroot_lowe_.latmnum, &skroot_lowe_.latmh,
-	                &skroot_lowe_.lmx24, &skroot_lowe_.ltimediff, &skroot_lowe_.lnsratio,
-	                &skroot_lowe_.lsdir[0], &skroot_lowe_.spaevnum, &skroot_lowe_.spaloglike,
-	                &skroot_lowe_.sparesq, &skroot_lowe_.spadt, &skroot_lowe_.spadll,
-	                &skroot_lowe_.spadlt, &skroot_lowe_.spamuyn, &skroot_lowe_.spamugdn,
-	                &skroot_lowe_.posmc[0], &skroot_lowe_.dirmc[0], &skroot_lowe_.pabsmc[0],
-	                &skroot_lowe_.energymc[0], &skroot_lowe_.darkmc, &skroot_lowe_.islekeep,
-	                &skroot_lowe_.bspatlik, &skroot_lowe_.clpatlik, &skroot_lowe_.lwatert,
-	                &skroot_lowe_.lninfo, &skroot_lowe_.linfo[0]);
+	skroot_set_lowe_(&lun,                      &skroot_lowe_.bsvertex[0], &skroot_lowe_.bsresult[0],
+	                 &skroot_lowe_.bsdir[0],    &skroot_lowe_.bsgood[0],   &skroot_lowe_.bsdirks,
+	                 &skroot_lowe_.bseffhit[0], &skroot_lowe_.bsenergy,    &skroot_lowe_.bsn50,
+	                 &skroot_lowe_.bscossun,    &skroot_lowe_.clvertex[0], &skroot_lowe_.clresult[0],
+	                 &skroot_lowe_.cldir[0],    &skroot_lowe_.clgoodness,  &skroot_lowe_.cldirks,
+	                 &skroot_lowe_.cleffhit[0], &skroot_lowe_.clenergy,    &skroot_lowe_.cln50,
+	                 &skroot_lowe_.clcossun,    &skroot_lowe_.latmnum,     &skroot_lowe_.latmh,
+	                 &skroot_lowe_.lmx24,       &skroot_lowe_.ltimediff,   &skroot_lowe_.lnsratio,
+	                 &skroot_lowe_.lsdir[0],    &skroot_lowe_.spaevnum,    &skroot_lowe_.spaloglike,
+	                 &skroot_lowe_.sparesq,     &skroot_lowe_.spadt,       &skroot_lowe_.spadll,
+	                 &skroot_lowe_.spadlt,      &skroot_lowe_.spamuyn,     &skroot_lowe_.spamugdn,
+	                 &skroot_lowe_.posmc[0],    &skroot_lowe_.dirmc[0],    &skroot_lowe_.pabsmc[0],
+	                 &skroot_lowe_.energymc[0], &skroot_lowe_.darkmc,      &skroot_lowe_.islekeep,
+	                 &skroot_lowe_.bspatlik,    &skroot_lowe_.clpatlik,    &skroot_lowe_.lwatert,
+	                 &skroot_lowe_.lninfo,      &skroot_lowe_.linfo[0]);
 	
 	// remove hits outside 1.3 microsec
 	delete_outside_hits_();

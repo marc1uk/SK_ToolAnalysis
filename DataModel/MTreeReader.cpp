@@ -123,8 +123,17 @@ int MTreeReader::ParseBranches(){
 	thetree->GetEntry(0);
 	
 	if(verbosity) std::cout<<"getting leaves"<<std::endl;
-	for(int i=0; i<thetree->GetListOfLeaves()->GetEntriesFast(); ++i){
-		TLeaf* lf=(TLeaf*)thetree->GetListOfLeaves()->At(i);
+	//for(int i=0; i<thetree->GetListOfLeaves()->GetEntriesFast(); ++i){
+	for(int i=0; i<thetree->GetListOfBranches()->GetEntriesFast(); ++i){
+		//TLeaf* lf=(TLeaf*)thetree->GetListOfLeaves()->At(i);
+		TBranch* br=(TBranch*)thetree->GetListOfBranches()->At(i);
+		// trying to work around splitting of branches here, so that we parse
+		// the list of branches, but without processing branches that represent
+		// members of a split class. In a split branch, the branch from
+		// 'TTree->GetListOfBranches()' has itself 'TBranch->GetListOfBranches > 0'
+		// whereas non-split branches have ==0. But, both seem to have
+		// 'TBranch->GetListOfLeaves()==1'. .. are we safe to assume always 1?
+		TLeaf* lf = (TLeaf*)br->GetListOfLeaves()->At(0);
 		std::string branchname = lf->GetName();
 		leaf_pointers.emplace(branchname,lf);
 		branch_pointers.emplace(branchname,lf->GetBranch());
@@ -140,8 +149,7 @@ int MTreeReader::ParseBranches(){
 		if (lf->IsA() == TLeafElement::Class()) {
 			// could be TObjects, or could be stl containers
 			// is intptr_t any better than (void*)? probably not.
-			if(verbosity>1) std::cout<<"branch "<<branchname
-				<<" stores object at "<<lf->GetValuePointer()<<std::endl;
+			// note that 'lf->GetValuePointer()' returns 0 for objects!
 			TBranchElement* bev = (TBranchElement*)lf->GetBranch();
 			intptr_t objpp=reinterpret_cast<intptr_t>(bev->GetObject());
 			branch_value_pointers.emplace(branchname,objpp);
@@ -151,7 +159,16 @@ int MTreeReader::ParseBranches(){
 			// both classes inheriting from TObject and STL containers
 			// are flagged as TLeafElements, so need further check
 			TClass* ac = TClass::GetClass(lf->GetTypeName());
-			branch_istobject.emplace(branchname,ac->InheritsFrom("TObject"));
+			if(ac!=nullptr){
+				branch_istobject.emplace(branchname,ac->InheritsFrom("TObject"));
+			} else {
+				std::cerr<<"Unknown class for branch "<<lf->GetBranch()->GetTitle()
+						 <<"! Please make a dictionary."<<std::endl;
+				// what are the consequences of this? Do we need to remove it from
+				// the maps? Will the TreeReader fail if we do not?
+				// is it sufficient simply to instead just say it does not inherit from TObject?
+				branch_istobject.emplace(branchname,false);
+			}
 		}
 		// handle arrays
 		//else if(lf->GetLen()>1){  // flattened length. Unsuitable when dynamic size happens to be 1!

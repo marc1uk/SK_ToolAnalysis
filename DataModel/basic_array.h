@@ -64,11 +64,22 @@ class basic_array /*: public generic_array*/ {
 				   reinterpret_cast<W*>(addr_in);
 		//std::cout<<"addr is of type "<<type_name<W*>()<<" and is at "<<addr<<std::endl;
 	}
+	
+	// pointer to array
 	template<class X>
-	basic_array(X ref_in, typename std::enable_if<std::is_same<typename std::remove_extent<typename std::remove_pointer<X>::type>::type, T>::value, bool>::type potato= true){
-		//std::cout<<"reference constructor with arg type "<<type_name<X>()<<std::endl;
+	basic_array(X ptr_in, typename std::enable_if<std::is_same<typename std::remove_extent<typename std::remove_pointer<X>::type>::type, T>::value, bool>::type potato= true){
+		//std::cout<<"pointer constructor with arg type "<<type_name<X>()<<std::endl;
 		a_size = sizeof(typename std::remove_pointer<X>::type)/sizeof(T);
-		addr = &(*ref_in)[0];
+		addr = &(*ptr_in)[0];
+	}
+	
+	// reference to array
+	template<typename X, size_t N>
+	basic_array(X (&ref_in)[N]){
+		//std::cout<<"reference constructor with arg type "<<type_name<decltype(ref_in)>()<<std::endl;
+		//std::cout<<"X is of type "<<type_name<X>()<<std::endl;
+		a_size = N; //sizeof(typename std::remove_pointer<X>::type)/sizeof(T);
+		addr = &(const_cast<W*>(ref_in))[0];
 	}
 	
 	W operator[](int i) const {
@@ -297,7 +308,16 @@ class basic_array<T,true> /*: public generic_array*/ {
 	
 	// 2. BUILD THE WRAPPER
 	// ---------------------
+	// note that &anarray returns a pointer to an array of the correct type
+	// (e.g. float(*)[3], which is a pointer to an array of 3 floats, which may be declared as:
+	// float (*myarraypointer)[3] = &myarray;   // and used as
+	// (*myarraypointer)[1]=20;
+	// note this is NOT just a pointer to the first element (float* thing = &anarray[0])
 	basic_array<std::remove_extent<decltype(anarray)>::type> myarray(&anarray);
+	// float (&myarrayref)[3] = myarray;        // is a reference to an array of 3 floats
+	// alternatively:
+	// typedef int array_type[3];
+	// array_type& ra = a;
 	
 	// DYNAMICALLY SIZED ARRAYS
 	// ========================

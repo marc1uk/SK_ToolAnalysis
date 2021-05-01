@@ -20,6 +20,7 @@ if (tool=="FitSpallationDt") ret=new FitSpallationDt;
 if (tool=="PurewaterSpallAbundanceCuts") ret=new PurewaterSpallAbundanceCuts;
 if (tool=="TreeReader") ret=new TreeReader;
 if (tool=="lf_allfit") ret=new lf_allfit;
+if (tool=="TreeReaderDemo") ret=new TreeReaderDemo;
 return ret;
 }
 
