@@ -1,6 +1,6 @@
 verbosity 1
 treeReaderName spallTree        # name of the TreeReader used for input
-#outputFile /host/software/relic_sk4_ana/li9/li9_subset.root
+#outputFile $HOME/relic_sk4_ana/li9/li9_subset.root
 outputFile li9_selections.root
 
 # cut variables

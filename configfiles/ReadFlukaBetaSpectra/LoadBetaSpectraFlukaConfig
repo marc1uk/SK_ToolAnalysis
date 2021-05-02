@@ -1,6 +1,6 @@
 # LoadBetaSpectraFluka config file
 verbosity 1
-inputFile /host/software/relic_sk4_ana/li9/alice_fluka_sims_mergedall_myroot_newsampling.root
+inputFile $HOME/relic_sk4_ana/li9/alice_fluka_sims_mergedall_myroot_newsampling.root
 histosFile FlukaBetaSpectra_bsgoodcut_bsmaxcut_totE.root
 mapsFile FlukaBetaEfficiencies_bsgoodcut_bsmaxcut_totE.bs
 maxEvents -1
