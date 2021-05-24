@@ -35,11 +35,14 @@ RootLib= `root-config --libs --evelibs --glibs`
 # --glibs
 # --evelibs for TParticlePDG
 
+PythonInclude= `python3-config --cflags`
+PythonLib = `python3-config --libs`
+
 DataModelInclude = $(RootInclude)
 DataModelLib = $(RootLib)
 
-MyToolsInclude =
-MyToolsLib = $(LDFLAGS) $(LDLIBS)
+MyToolsInclude = $(PythonInclude)
+MyToolsLib = $(LDFLAGS) $(LDLIBS) $(PythonLib)
 
 all: lib/libStore.so lib/libLogging.so lib/libDataModel.so include/Tool.h lib/libMyTools.so lib/libServiceDiscovery.so lib/libToolChain.so main RemoteControl  NodeDaemon
 

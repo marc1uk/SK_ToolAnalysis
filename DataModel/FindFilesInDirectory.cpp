@@ -76,8 +76,8 @@ int FindFilesInDirectory(std::string inputdir, std::string pattern, std::vector<
 				// TODO should we use std::regex::perl? boost had issues with extended
 			}
 		} catch (std::regex_error& e){
-			if(algorithms::regex_err_strings.count(e.code())){
-				std::cout<<algorithms::regex_err_strings.at(e.code())<<std::endl;
+			if(constants::regex_err_strings.count(e.code())){
+				std::cout<<constants::regex_err_strings.at(e.code())<<std::endl;
 			} else {
 				std::cout<<"unknown std::refex_error?? code: "<<e.code()<<std::endl;
 			}
@@ -105,8 +105,8 @@ int FindFilesInDirectory(std::string inputdir, std::string pattern, std::vector<
 				std::cout<<"Warning: FindFilesInDirectory regex matching threw out of range error!"<<std::endl;
 				continue;
 			} catch (std::regex_error& e){
-				if(algorithms::regex_err_strings.count(e.code())){
-					std::cout<<algorithms::regex_err_strings.at(e.code())<<std::endl;
+				if(constants::regex_err_strings.count(e.code())){
+					std::cout<<constants::regex_err_strings.at(e.code())<<std::endl;
 				} else {
 					std::cout<<"unknown std::refex_error?? code: "<<e.code()<<std::endl;
 				}
@@ -175,8 +175,8 @@ int FindFilesInDirectory(std::string inputdir, std::string pattern, std::vector<
 				try{
 					boost::regex_match (afile, submatches, theexpression);
 				} catch (boost::regex_error& e){
-					if(algorithms::bregex_err_strings.count(e.code())){
-						std::cerr<<algorithms::bregex_err_strings.at(e.code())<<std::endl;
+					if(constants::bregex_err_strings.count(e.code())){
+						std::cerr<<constants::bregex_err_strings.at(e.code())<<std::endl;
 					} else {
 						std::cerr<<"unknown boost::refex_error?? code: "<<e.code()<<std::endl;
 					}

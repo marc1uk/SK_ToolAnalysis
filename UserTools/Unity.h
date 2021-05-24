@@ -15,3 +15,4 @@
 #include "PurewaterSpallAbundanceCuts.h"
 #include "lf_allfit.h"
 #include "TreeReaderDemo.h"
+#include "PythonScript.h"
