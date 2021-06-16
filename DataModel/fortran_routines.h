@@ -49,7 +49,11 @@ extern "C" void lfclear_all_();
 extern "C" void lfallfit_sk4_final_qe43_(float*, int*, int*, int*, int*);
 extern "C" void lfallfit_sk4_data_(float*, int*, int*);
 extern "C" void lfallfit_sk4_gain_corr_(float*, int*, int*, int*, int*);
+extern "C" void lfallfit_sk4_mc_(float*, int*, int*);
 // skroot_lowe_ common block
+
+// TODO where from
+extern "C" void skbadch_(int*, int*, int*);
 
 // after that there were many undefined references, e.g. `sortzv_`, `hf1_`, `hf2_`...
 // after some trial and error these are resolved, but i lost track of which provided what.

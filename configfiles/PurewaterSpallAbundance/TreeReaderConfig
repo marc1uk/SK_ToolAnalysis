@@ -14,7 +14,7 @@ selectionsFile li9_selections.root
 # we should process every entry here. If undefined, the loosest cut on file will be used.
 cutName lowe_energy>6MeV
 
-StartBranchList
+StartInputBranchList
 ###############
 HEADER
 LOWE
@@ -55,4 +55,4 @@ spadlt
 #neutdiff
 multispa_dist
 #############
-EndBranchList
+EndInputBranchList

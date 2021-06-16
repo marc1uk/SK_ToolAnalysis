@@ -5,10 +5,10 @@ readerName demoReader
 firstEntry 10                 # first TTree entry to process
 maxEntries 10                 # max num input entries to process
 
-StartBranchList
+StartInputBranchList
 ###############
 HEADER
 LOWE
 TQREAL
 #############
-EndBranchList
+EndInputBranchList

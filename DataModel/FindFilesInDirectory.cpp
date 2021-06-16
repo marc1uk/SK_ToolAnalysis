@@ -20,9 +20,9 @@ int FindFilesInDirectory(std::string inputdir, std::string pattern, std::vector<
 	
 	// build command
 	std::string lscommand="";
-	std::string case_char = case_sensitive ? "-" : "-i";
+	std::string case_char = case_sensitive ? " -" : " -i";
 	std::string depth_string = 
-		(max_subdir_depth>0) ? std::string("") : (std::string("-maxdepth ")+std::to_string(max_subdir_depth));
+		(max_subdir_depth>0) ? std::string("") : (std::string(" -maxdepth ")+std::to_string(max_subdir_depth));
 	if(!use_regex){
 		lscommand = "find " + absdir + depth_string + case_char +"name " + pattern;
 	} else {

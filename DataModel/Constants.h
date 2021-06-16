@@ -28,6 +28,8 @@ double PdgToMass(int code);
 void PrintVector(TVector3& avec, bool newline=false);
 void PrintVector(TLorentzVector& avec, bool newline=false);
 
+enum class SKROOTMODE : int { READ = 2, WRITE = 1, COPY = 0 };
+
 namespace constants{
 	
 	/// @brief The format code for a multievent binary BoostStore

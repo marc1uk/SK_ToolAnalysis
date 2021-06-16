@@ -27,34 +27,22 @@ bool LoadFileList::Initialise(std::string configfile, DataModel &data){
 	
 	Log(toolName+": Initializing",v_debug,verbosity);
 	
-	if(inputFile!=""){
-		Log(toolName+" will process file "+inputFile,v_message,verbosity);
-		// check if it's just a filename, and if so, prepend the path if given
-		bool abs_path = (inputFile.find('/')!=std::string::npos);
-		if(!abs_path){
-			// check that we have a directory
-			if(inputDirectory==""){
-				Log(toolName+" Error! Input file appears to contain a name only,"
-					+" but input directory is not given!",v_error,verbosity);
-				return false;
-			}
-			list_of_files.emplace_back(inputDirectory + "/" + inputFile);
-		}
-	} else {
-		// get list of files to process.
-		int num_files = GetFileList();
-		Log(toolName+" loaded "+toString(num_files)+" files to read",v_debug,verbosity);
-	}
+	// get list of files to process.
+	int num_files = GetFileList();
+	Log(toolName+" loaded "+toString(num_files)+" files to read",v_debug,verbosity);
 	
 	// set the files into the CStore
-	m_data->CStore.Set("InputFileList", list_of_files);
+	m_data->CStore.Set(FileListName, list_of_files);
 	
 	return true;
 }
 
 int LoadFileList::GetFileList(){
-	// could be either by specifying a file with a list in, or a pattern and a directory
-	if(fileList!=""){
+	if(inputFile!=""){
+		Log(toolName+" will process file "+inputFile,v_message,verbosity);
+		list_of_files.emplace_back(inputFile);
+		return 1;
+	} else if(fileList!=""){
 		Log(toolName+" loading list of input files from "+fileList,v_debug,verbosity);
 		// user has provided a list of files. Load the list.
 		int num_files = ReadListFromFile(fileList, list_of_files);
@@ -82,13 +70,14 @@ int LoadFileList::GetFileList(){
 		Log(toolName+" Error! Using input file pattern but input directory is not given!",v_error,verbosity);
 		return -1;
 	}
-	Log(toolName+" searching for files in "+inputDirectory+" that match pattern '"+filePattern,v_debug,verbosity);
+	Log(toolName+" searching for files in "+inputDirectory
+		+" that match pattern '"+filePattern+"'",v_debug,verbosity);
 	
 	// This function is in DataModel/FindFilesInDirectory.cpp
 	// int FindFilesInDirectory(std::string inputdir, std::string pattern, std::vector<std::string> &matches, bool case_sensitive=false, int max_subdir_depth=0, bool use_regex=false, std::vector<std::string>* filenames=nullptr, std::vector<std::vector<std::string>>* output_submatches=nullptr, bool verbose=false);
 	bool case_sensitive = false;  // case insensitive (default false)
 	int max_subdir_depth=1;       // this dir only, 0: all the way down (default 0)
-	int num_files = FindFilesInDirectory(inputDirectory, filePattern, list_of_files, case_sensitive, max_subdir_depth, useRegex);
+	int num_files = FindFilesInDirectory(inputDirectory, filePattern, list_of_files, case_sensitive, max_subdir_depth, useRegex, nullptr, nullptr, (verbosity>=v_debug));
 	
 	return num_files;
 }

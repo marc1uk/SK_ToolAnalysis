@@ -78,11 +78,37 @@ int MTreeReader::Load(std::string filename, std::string treename){
 	return ok;
 }
 
-int MTreeReader::Load(TChain* chain){
-	thetree = (TTree*)chain;
-	isChain = true;
-	thefile = thetree->GetCurrentFile();
+int MTreeReader::Load(std::vector<std::string> filelist, std::string treename){
+	// Construct a TChain and add all files from the list
+	if(verbosity) std::cout<<"loading TChain '"<<treename<<"' with "<<filelist.size()<<" files"<<std::endl;
+	if(filelist.size()==0){
+		std::cerr<<"!!! MTreeReader constructor called with empty file list !!!"<<std::endl;
+		return -1;
+	}
+	TChain* chain = new TChain(treename.c_str());
+	for(std::string& afile : filelist){
+		chain->Add(afile.c_str());
+		// ↑ note this does not check the files contain the correct TTree!
+	}
+	int localEntry = chain->LoadTree(0);
+	if(localEntry<0){
+		std::cerr<<"!!! MTreeReader constructor found no valid files !!!"<<std::endl
+				 <<"An attempt to use construct a TChain scanned "<<filelist.size()
+				 <<" files, but loading the first TTree failed with code "
+				 <<localEntry<<"!"<<std::endl
+				 <<"Is the tree name \""<<treename<<"\" correct?"<<std::endl
+				 <<"The first path was "<<filelist.front()<<std::endl;
+	} else {
+		Load(chain);
+	}
+	return 1;
+}
+
+int MTreeReader::Load(TTree* thetreein){
+	thetree = thetreein;
 	int ok = ParseBranches();
+	// do this after ParseBranches as TChains may return nullptr if no file has been loaded yet
+	thefile = thetree->GetCurrentFile();
 	return ok;
 }
 
@@ -379,32 +405,29 @@ int MTreeReader::GetEntry(long entry_number){
 		if(not clear_ok){ return -2; }
 	}
 	
-	if(isChain){
-		// if we're processing a chain, load the tree first
-		int status = thetree->LoadTree(entry_number);
-		if(status<0){
-			/*
-			-1: The chain is empty.
-			-2: The requested entry number is less than zero or too large for the chain or TTree.
-			-3: The file corresponding to the entry could not be correctly open
-			-4: The TChainElement corresponding to the entry is missing or the TTree is missing from the file.
-			-5: Internal error, please report the circumstance when this happen as a ROOT issue.
-			-6: An error occurred within the notify callback.
-			*/
-			std::cerr<<"MTreeReader error loading next TTree from TChain! "
-					 <<"TChain::LoadTree returned "<<status<<"\n";
-			return status;
-		}
-		
-		// check for tree changes
-		if(currentTreeNumber!=thetree->GetTreeNumber()){
-			// new tree
-			currenttree = thetree->GetTree();
-			currentTreeNumber = thetree->GetTreeNumber();
-			thefile = thetree->GetCurrentFile();
-			// TODO maybe implement some mechanism of notifying requestors?
-			// maybe build a list of function pointers to invoke?
-		}
+	// if we're processing a chain, load the tree first
+	int status = thetree->LoadTree(entry_number);
+	if(status<0){
+		/*
+		-1: The chain is empty.
+		-2: The requested entry number is less than zero or too large for the chain or TTree.
+		-3: The file corresponding to the entry could not be correctly open
+		-4: The TChainElement corresponding to the entry is missing or the TTree is missing from the file.
+		-5: Internal error, please report the circumstance when this happen as a ROOT issue.
+		-6: An error occurred within the notify callback.
+		*/
+		std::cerr<<"MTreeReader error loading next TTree from TChain! "
+				 <<"TChain::LoadTree returned "<<status<<"\n";
+		return status;
+	}
+	
+	// check for tree changes
+	if(currentTreeNumber!=thetree->GetTreeNumber()){
+		// new tree
+		currentTreeNumber = thetree->GetTreeNumber();
+		thefile = thetree->GetCurrentFile();
+		// TODO maybe implement some mechanism of notifying requestors?
+		// maybe build a list of function pointers to invoke?
 	}
 	
 	// load data from tree
@@ -430,6 +453,14 @@ MTreeReader::~MTreeReader(){
 	delete thefile;
 }
 
+void MTreeReader::SetClosed(){
+	// Set the file as closed by an external user
+	// (e.g. when using a TreeManager, the TreeManager destructor closes the file).
+	thetree=nullptr;
+	thefile=nullptr;
+	// hey, one could even invoke Load() again and re-use this MTreeReader now!
+}
+
 // misc operations
 void MTreeReader::SetVerbosity(int verbin){
 	verbosity=verbin;
@@ -448,16 +479,17 @@ TFile* MTreeReader::GetFile(){
 TTree* MTreeReader::GetCurrentTree(){
 	// return the tree containing the current element if we're processing a TChain
 	// (still valid if processing a single TTree)
-	return currenttree;
+	return thetree->GetTree();
 }
 
 TChain* MTreeReader::GetChain(){
 	// return a TChain: we can only do this if we're processing a TChain
 	// otherwise return a nullptr (we shouldn't return a child class pointer to a base class object)
-	if(!isChain){
+	TChain* c = dynamic_cast<TChain*>(thetree); // returns nullptr if this isn't actually a TChain
+	if(c==nullptr){
 		std::cerr<<"Warning: MTreeReader::GetChain called when processing a TTree"<<std::endl;
 	}
-	return dynamic_cast<TChain*>(thetree); // XXX returns nullptr if this isn't actually a TChain
+	return c;
 }
 
 TTree* MTreeReader::GetTree(){
@@ -562,3 +594,11 @@ int MTreeReader::OnlyEnableBranches(std::vector<std::string> branchnames){
 	return (num_named_branches==0);
 }
 
+// for SKROOT files this is set in TreeReader tool... is this a good idea?
+void MTreeReader::SetMCFlag(bool MCin){
+	isMC = MCin;
+}
+
+bool MTreeReader::GetMCFlag(){
+	return isMC;
+}

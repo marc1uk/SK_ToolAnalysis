@@ -16,3 +16,4 @@
 #include "lf_allfit.h"
 #include "TreeReaderDemo.h"
 #include "PythonScript.h"
+#include "lf_allfit_new.h"

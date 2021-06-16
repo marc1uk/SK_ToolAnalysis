@@ -6,7 +6,7 @@ inputFile spall_dts.root
 treeName spall
 readerName spallTree
 
-StartBranchList
+StartInputBranchList
 ###############
 nrunsk
 muboy_status
@@ -15,4 +15,4 @@ lt
 bsgood_relic
 energy_relic
 #############
-EndBranchList
+EndInputBranchList

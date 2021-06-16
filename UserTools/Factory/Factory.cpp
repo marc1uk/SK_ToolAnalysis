@@ -22,6 +22,7 @@ if (tool=="TreeReader") ret=new TreeReader;
 if (tool=="lf_allfit") ret=new lf_allfit;
 if (tool=="TreeReaderDemo") ret=new TreeReaderDemo;
 if (tool=="PythonScript") ret=new PythonScript;
+if (tool=="lf_allfit_new") ret=new lf_allfit_new;
 return ret;
 }
 

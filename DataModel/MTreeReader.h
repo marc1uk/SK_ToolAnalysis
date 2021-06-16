@@ -23,9 +23,9 @@ class MTreeReader {
 	int Load(std::string filename, std::string treename);
 	int LoadFile(std::string filename);
 	int LoadTree(std::string treename);
-	int Load(TChain* chain);
-	// TODO constructor/loader for tchains or tree pointers
-	// TODO accept vector of files from LoadFileList Algorithms function
+	int Load(TTree* thetreein);
+	int Load(std::vector<std::string> filelist, std::string treename);
+	void SetClosed();
 	
 	// get a pointer to an object
 	template<typename T>
@@ -230,6 +230,10 @@ class MTreeReader {
 	std::string GetBranchType(std::string branchname);
 	std::vector<size_t> GetBranchDims(std::string branchname);
 	
+	// random assistive functions
+	void SetMCFlag(bool MCin);
+	bool GetMCFlag();
+	
 	private:
 	// functions
 	int ParseBranches();
@@ -251,13 +255,11 @@ class MTreeReader {
 	
 	TFile* thefile=nullptr;
 	TTree* thetree=nullptr;      // generic, if working with a tchain we cast it to a TTree
-	//TChain* thechain=nullptr;
-	bool isChain=false;
-	TTree* currenttree=nullptr;  // the active TTree
 	bool autoclear=true;  // call 'Clear' method on all object branches before GetEntry
 	int verbosity=1; // TODO add to constructor
 	uint64_t currentEntryNumber=0;
 	int currentTreeNumber=0;
+	bool isMC=false;
 	
 };
 

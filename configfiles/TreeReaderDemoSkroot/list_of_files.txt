@@ -1,0 +1,3 @@
+# a list of files to process
+$HOME/standalones/lowfit_standalone/rfm_run062773.000033.root
+#$HOME/skdetsim/outputs/skdetsim.r77957.root
