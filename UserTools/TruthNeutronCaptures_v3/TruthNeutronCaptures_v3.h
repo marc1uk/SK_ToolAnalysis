@@ -21,12 +21,10 @@ class TLorentzVector;
 /**
 * \class TruthNeutronCaptures_v3
 *
-* A simple tool to plot basic characteristics of neutron captures, reading outputs from skdetsim.
-* 1. run skdetsim or skdetsim-gd with output option 'SKCNTL-OUTPUTTYPE 2' to generate zbs output file
-* 2. convert the zbs file to an hbk file with `fillnt_simple.sh -o (output hbook file) (input zbs file)`
-* 3. convert the hbk file to a root file with `h2root (input hbook file) (output root file)`
-* This somewhat convoluted process is required to retain information about neutrons and gammas.
-* This file processes the output root files from step 3.
+* A simple tool to plot basic characteristics of neutron captures in SKG4, reading outputs from Harada-san's
+* SecondaryInfo arrays. These represent largely the same variable set as from the atmpd information
+* available via fillnt_simple and h2root. There are, however, minor differences accounted for in this tool
+* compared to the TruthNeutronCaptures tool used for skdetsim->fillnt_simple->h2root files.
 *
 * $Author: M.O'Flahery $
 * $Date: 2020/08/12 $
