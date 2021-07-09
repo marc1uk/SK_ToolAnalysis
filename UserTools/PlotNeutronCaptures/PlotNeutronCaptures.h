@@ -46,8 +46,6 @@ class PlotNeutronCaptures: public Tool {
 	// tool variables
 	// ==============
 	std::string toolName;
-	bool DrawPlots;
-	TApplication* rootTApp;
 	std::string inputFile;
 	std::string outputFile; // or just add to the input file?
 	int maxEvents=-1;

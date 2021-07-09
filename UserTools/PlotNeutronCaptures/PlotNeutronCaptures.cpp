@@ -46,7 +46,6 @@ bool PlotNeutronCaptures::Initialise(std::string configfile, DataModel &data){
 	m_variables.Get("verbosity",verbosity);            // how verbose to be
 	m_variables.Get("inputFile",inputFile);            // a single specific input file
 	m_variables.Get("outputFile",outputFile);          // output file to write
-	m_variables.Get("drawPlots",DrawPlots);            // show root plots while working? otherwise just save
 	m_variables.Get("maxEvents",maxEvents);            // user limit to number of events to process
 	m_variables.Get("writeFrequency",WRITE_FREQUENCY); // how many events to TTree::Fill between TTree::Writes
 	
@@ -75,27 +74,6 @@ bool PlotNeutronCaptures::Initialise(std::string configfile, DataModel &data){
 //	friendTree->Branch("neutron_travel_dist",&placeholder,32000,0);
 //	friendTree->Branch("neutron_travel_time",&placeholder,32000,0);
 //	friendTree->Branch("neutron_n_daughters",&placeholder,32000,0);
-	
-	if(DrawPlots){
-		// Only one TApplication may exist. Get it, or make it if there isn't one
-		int myargc=0;
-		intptr_t tapp_ptr=0;
-		get_ok = m_data->CStore.Get("RootTApplication",tapp_ptr);
-		if(not get_ok){
-			if(verbosity>2) std::cout<<toolName<<": making global TApplication"<<std::endl;
-			rootTApp = new TApplication("rootTApp",&myargc,0);
-			tapp_ptr = reinterpret_cast<intptr_t>(rootTApp);
-			m_data->CStore.Set("RootTApplication",tapp_ptr);
-		} else {
-			if(verbosity>2) std::cout<<toolName<<": Retrieving global TApplication"<<std::endl;
-			rootTApp = reinterpret_cast<TApplication*>(tapp_ptr);
-		}
-		int tapplicationusers;
-		get_ok = m_data->CStore.Get("RootTApplicationUsers",tapplicationusers);
-		if(not get_ok) tapplicationusers=1;
-		else tapplicationusers++;
-		m_data->CStore.Set("RootTApplicationUsers",tapplicationusers);
-	}
 	
 	return true;
 }
@@ -237,21 +215,6 @@ bool PlotNeutronCaptures::Finalise(){
 	Log(toolName+" cleanup",v_debug,verbosity);
 	if(friendTree) friendTree->ResetBranchAddresses();
 	if(outfile){ outfile->Close(); delete outfile; outfile=nullptr; }
-	
-	// unregister ourselves as a user of the TApplication, and delete it if we're the last one
-	if(DrawPlots){
-		int tapplicationusers=0;
-		get_ok = m_data->CStore.Get("RootTApplicationUsers",tapplicationusers);
-		if(not get_ok || tapplicationusers==1){
-			if(rootTApp){
-				std::cout<<toolName<<": Deleting global TApplication"<<std::endl;
-				delete rootTApp;
-				rootTApp=nullptr;
-			}
-		} else if(tapplicationusers>1){
-			m_data->CStore.Set("RootTApplicationUsers",tapplicationusers-1);
-		}
-	}
 	
 	return true;
 }
