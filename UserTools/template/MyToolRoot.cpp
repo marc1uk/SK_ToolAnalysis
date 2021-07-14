@@ -94,14 +94,14 @@ int MyToolRoot::ReadEntry(long entry_number){
 	int bytesread = myTreeReader.GetEntry(entry_number);
 	
 	// stop loop if we ran off the end of the tree
-	if(bytesread==0){
+	if(bytesread==-2||bytesread==0){
 		Log(toolName+" hit end of input file, stopping loop",v_message,verbosity);
 		m_data->vars.Set("StopLoop",1);
 	}
 	// stop loop if we had an error of some kind
 	else if(bytesread<0){
 		 if(bytesread==-1) Log(toolName+" IO error loading next input entry!",v_error,verbosity);
-		 if(bytesread==-2) Log(toolName+" AutoClear error loading next input entry!",v_error,verbosity);
+		 if(bytesread==-10) Log(toolName+" AutoClear error loading next input entry!",v_error,verbosity);
 		 if(bytesread <-2) Log(toolName+" Unknown error "+toString(bytesread)
 		                       +" loading next input entry!",v_error,verbosity);
 		 m_data->vars.Set("StopLoop",1);

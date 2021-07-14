@@ -93,11 +93,11 @@ bool TruthNeutronCaptures::Execute(){
 		// Pre-Load next input entry so we can stop the toolchain
 		// if we're about to run off the end of the tree or encounter a read error
 		get_ok = ReadEntryNtuple(entry_number);
-		if(get_ok==0){
+		if(get_ok<1&&get_ok>-3){
 			m_data->vars.Set("StopLoop",1);
 			Log(toolName+" Hit end of input file, stopping loop",v_warning,verbosity);
 		}
-		else if(get_ok==-2){
+		else if(get_ok==-10){
 			Log(toolName+" Error during AutoClear while loading next input ntuple entry!",v_error,verbosity);
 			return false;
 		}

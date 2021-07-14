@@ -402,7 +402,7 @@ int MTreeReader::GetEntry(long entry_number){
 	if(verbosity>3) std::cout<<"MTreeReader GetEntry "<<entry_number<<std::endl;
 	if(autoclear){
 		int clear_ok = Clear();
-		if(not clear_ok){ return -2; }
+		if(not clear_ok){ return -10; }
 	}
 	
 	// if we're processing a chain, load the tree first
@@ -411,14 +411,24 @@ int MTreeReader::GetEntry(long entry_number){
 		/*
 		-1: The chain is empty.
 		-2: The requested entry number is less than zero or too large for the chain or TTree.
-		-3: The file corresponding to the entry could not be correctly open
+		-3: The file corresponding to the entry could not be correctly opened
 		-4: The TChainElement corresponding to the entry is missing or the TTree is missing from the file.
 		-5: Internal error, please report the circumstance when this happen as a ROOT issue.
 		-6: An error occurred within the notify callback.
 		*/
 		std::cerr<<"MTreeReader error loading next TTree from TChain! "
 				 <<"TChain::LoadTree returned "<<status<<"\n";
-		return status;
+		// 0 from GetEntry indicates entry does not exist      |
+		// -1 from LoadTree indicates empty tchain             | these 3 are roughly equivalent
+		// -2 from LoadTree indicates <0 or off end of chain   |
+		
+		// -1 from GetEntry indicates IO error                 | these 2 (5) are roughly equivalent
+		// -3->-6 from LoadTree indicate IO errors             | 
+		// first set: terminate toolchain, second set: maybe try to continue to next entry?
+		int bytesread;
+		if(status>-3) bytesread = 0;  // treat as "end of tchain" - merge "empty tchain" with "entry doesn't exist"
+		else bytesread = status;      // treat as "IO error" - no loss of info
+		return bytesread;
 	}
 	
 	// check for tree changes

@@ -83,14 +83,14 @@ int RootReadTest::ReadEntry(long entry_number){
 	int bytesread = myTreeReader.GetEntry(entrynum);
 	
 	// stop loop if we ran off the end of the tree
-	if(bytesread==0){
+	if(bytesread<1&&bytesread>-3){
 		std::cout<<"ReadRootTest Hit end of input file, stopping loop"<<std::endl;
 		m_data->vars.Set("StopLoop",1);
 	}
 	// stop loop if we had an error of some kind
 	else if(bytesread<0){
 		 if(bytesread==-1) std::cerr<<"ReadRootTest IO error loading next input entry!"<<std::endl;
-		 if(bytesread==-2) std::cerr<<"ReadRootTest AutoClear error loading next input entry!"<<std::endl;
+		 if(bytesread==-10) std::cerr<<"ReadRootTest AutoClear error loading next input entry!"<<std::endl;
 		 if(bytesread <-2) std::cerr<<"ReadRootTest Unknown error loading next input entry!"<<std::endl;
 		 m_data->vars.Set("StopLoop",1);
 	}
