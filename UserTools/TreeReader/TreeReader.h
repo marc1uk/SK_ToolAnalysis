@@ -48,15 +48,15 @@ class TreeReader: public Tool {
 	int firstEntry=0;
 	int entrynum=0;
 	int readEntries=0; // count how many TTree entries we've actually processed
-	int skroot=0;
 	SKROOTMODE skrootMode = SKROOTMODE::READ; // default to read
 	int skreadMode=0;  // 0=skread only, 1=skrawread only, 2=both
 	int skreadUser=0;  // 0=auto, 1=skread only, 2=skrawread only, 3=both
 	int LUN=10; // This is assumed 10 by some SKROOT algorithms so only override if you know what you're doing!
 	std::string skroot_options="31";  // 31 = read HEADER (required).
 	int skroot_badopt=23;             // 23 = LOWE default (mask bad chs, dead chs, noisy ID chs and OD chs)
-	int sk_geometry=4;  // TODO increment the default to 6.
-	std::string outputFile="";  // for when using SKROOT copy mode
+	int skroot_badch_ref_run=0;       // reference run for bad channel list for e.g. MC.
+	int sk_geometry=4;                // TODO increment the default to 6.
+	std::string outputFile="";        // for when using SKROOT copy mode
 	int skip_ped_evts = 1; // automatically skip to next ttree entry if skread returns 1 (pedestal/status entry)
 	
 	std::vector<std::string> list_of_files;

@@ -3,6 +3,7 @@
 #include "TTree.h"
 #include <set>
 #include <bitset>
+#include <algorithm> // std::reverse
 
 #include "Algorithms.h"
 #include "Constants.h"
@@ -57,7 +58,7 @@ bool TreeReader::Initialise(std::string configfile, DataModel &data){
 	// safety check that we were given an input file
 	if(inputFile=="" && FileListName==""){
 		// unless we are working in SKROOT write mode...
-		if(skroot==0 || skrootMode!=SKROOTMODE::WRITE){
+		if(skrootMode!=SKROOTMODE::WRITE){
 			Log(toolName+" error! no InputFile or FileListName given!",v_error,verbosity);
 			m_data->vars.Set("StopLoop",1);
 			return false;
@@ -74,6 +75,9 @@ bool TreeReader::Initialise(std::string configfile, DataModel &data){
 			return false;
 		}
 	}
+	// detect zebra files based on extention of first file
+	std::string firstfile = list_of_files.front();
+	if(firstfile.substr(firstfile.length()-4,firstfile.length())==".zbs"){ skrootMode==SKROOTMODE::ZEBRA; }
 	
 	// safety check that the requested name to associate to this reader is free
 	get_ok = m_data->Trees.count(readerName);
@@ -85,7 +89,7 @@ bool TreeReader::Initialise(std::string configfile, DataModel &data){
 	}
 	
 	// safety check we have an output file too, if working in SKROOT write or copy mode
-	if(skroot==1 && skrootMode!=SKROOTMODE::READ && outputFile==""){
+	if((skrootMode==SKROOTMODE::WRITE || skrootMode==SKROOTMODE::COPY) && outputFile==""){
 		logmessage = toolName+" error! SKROOT mode is ";
 		logmessage += ((skrootMode==SKROOTMODE::WRITE) ? "write" : "copy");
 		logmessage += " but no outputFile specified!";
@@ -95,15 +99,15 @@ bool TreeReader::Initialise(std::string configfile, DataModel &data){
 	}
 	
 	// warning check: see if we're given an input when we're in WRITE mode
-	if(skroot==1 && skrootMode==SKROOTMODE::WRITE && (inputFile!="" || FileListName!="")){
+	if(skrootMode==SKROOTMODE::WRITE && (inputFile!="" || FileListName!="")){
 		Log(toolName+" warning! InputFile or FileListName given, but mode is skroot::write! "
 					+"Inputs will be ignored: use another reader instance to read input from another file",
 					v_error,verbosity);
 	}
 	// warning check: see if we've been given an output when we're not in SKROOT::COPY or WRITE mode
-	if(outputFile!="" && (skroot!=1 || skrootMode==SKROOTMODE::READ)){
+	if((skrootMode!=SKROOTMODE::WRITE && skrootMode!=SKROOTMODE::COPY) && outputFile!=""){
 		logmessage  = toolName+" warning! outputFile given, but SKROOT mode is ";
-		logmessage += ((skroot==0) ? "not enabled. " : "READ only. ");
+		logmessage += ((skrootMode==SKROOTMODE::NONE) ? "not enabled. " : "READ only. ");
 		logmessage += "outputFile will be ignored!";
 		Log(logmessage,v_warning,verbosity);
 	}
@@ -112,7 +116,7 @@ bool TreeReader::Initialise(std::string configfile, DataModel &data){
 	// ------------------------------
 	// a lot of SK algorithms retrieve data via skroot_get_* calls behind the scenes,
 	// which means if we're processing skroot files we probably need a corresponding TreeManager.
-	if(skroot){
+	if(skrootMode!=SKROOTMODE::NONE){
 		// skroot_open_* invokes the singleton SuperManager class to create a TreeManager
 		// to be associated with a given SKROOT file. This TreeManager is just the usual
 		// TTree wrapper created via ROOT's MakeClass. 
@@ -124,76 +128,119 @@ bool TreeReader::Initialise(std::string configfile, DataModel &data){
 		// For now we'll just keep our own list of LUNs.
 		GenerateNewLUN();
 		
-		// There are 3 modes to the TreeManager:
-		// skroot_open_read_ calls the TreeManager constructor with mode = 2;
-		// Some branches may be skipped to optimize reading by using ZeroInBranch.
+		// "initialize data structures".
+		// Allegedly a ZEBRA thing, but we seem to need this even for ROOT files??
+		kzinit_();
 		
-		// skroot_open_write_ calls the TreeManager constructor with mode =1;
-		// It creates an output TTree with the full set of SKROOT branches.
-		// You should call skroot_set_* or TreeManager::Set* methods to populate branches, then
-		// call skroot_fill_tree (or TreeManager::fill_tree) to write a new output tree entry.
-		// Note: ZeroOutBranch doesn't work in this mode, all output branches will be created.
-		// Note: This mode is commented as "zbs 2 root" (or sometimes "root 2 zbs"),
-		// but neither skroot functions nor the TreeManager provide any means of handling zbs files.
-		// To do that, see e.g. $SKOFL_ROOT/examples/lowe/zbs2skroot.F
-		
-		// skroot_open_ calls the TreeManager constructor with mode = 0;
-		// This allows input file reading (as per mode 2), but also creates an output file
-		// with an SKROOT tree set up for copying events from input to output.
-		// (i.e. both trees' branch addresses point to the same object).
-		// Input read can be optimized via ZeroInBranch - these will not be read in or copied across.
-		// Further branches may be omitted from the copy to output via ZeroOutBranch.
-		// Output entries are written on each TreeManager::fill_tree() call,
-		// so a subset of entries may be copied across.
-		
-		// create the treemanager, and in write mode, the output file
-		switch(skrootMode){
-			case SKROOTMODE::READ:  skroot_open_read_(&LUN); break;
-			case SKROOTMODE::WRITE: skroot_open_write_(&LUN, outputFile.c_str(), outputFile.size()); break;
-			case SKROOTMODE::COPY:  skroot_open_(&LUN, outputFile.c_str(), outputFile.size()); break;
-		}
-		
-		// the following are not relevant for WRITE mode
-		if(skrootMode!=SKROOTMODE::WRITE){
-			// set the input file(s) to read.
-			// These need to be paths to files - glob patterns are not supported.
-			// Only the first will be used to retrieve the RareList, but multiple calls can
-			// be made to add subsequent files to the TChain.
-			// This doesn't yet open the files, it just adds them to a list of strings.
-			for(std::string& fname_in : list_of_files){
-				skroot_set_input_file_(&LUN, fname_in.c_str(), fname_in.size());
+		// slight change in initialization depending on SK root vs zebra
+		if(not (skrootMode==SKROOTMODE::ZEBRA)){
+			
+			// There are 3 modes to the TreeManager:
+			// skroot_open_read_ calls the TreeManager constructor with mode = 2;
+			// Some branches may be skipped to optimize reading by using ZeroInBranch.
+			
+			// skroot_open_write_ calls the TreeManager constructor with mode =1;
+			// It creates an output TTree with the full set of SKROOT branches.
+			// You should call skroot_set_* or TreeManager::Set* methods to populate branches, then
+			// call skroot_fill_tree (or TreeManager::fill_tree) to write a new output tree entry.
+			// Note: ZeroOutBranch doesn't work in this mode, all output branches will be created.
+			// Note: This mode is commented as "zbs 2 root" (or sometimes "root 2 zbs"),
+			// but neither skroot functions nor the TreeManager provide any means of handling zbs files.
+			// To do that, see e.g. $SKOFL_ROOT/examples/lowe/zbs2skroot.F
+			
+			// skroot_open_ calls the TreeManager constructor with mode = 0;
+			// This allows input file reading (as per mode 2), but also creates an output file
+			// with an SKROOT tree set up for copying events from input to output.
+			// (i.e. both trees' branch addresses point to the same object).
+			// Input read can be optimized via ZeroInBranch - these will not be read in or copied across.
+			// Further branches may be omitted from the copy to output via ZeroOutBranch.
+			// Output entries are written on each TreeManager::fill_tree() call,
+			// so a subset of entries may be copied across.
+			
+			// create the treemanager, and in write mode, the output file
+			switch(skrootMode){
+				case SKROOTMODE::READ:  skroot_open_read_(&LUN); break;
+				case SKROOTMODE::WRITE: skroot_open_write_(&LUN, outputFile.c_str(), outputFile.size()); break;
+				case SKROOTMODE::COPY:  skroot_open_(&LUN, outputFile.c_str(), outputFile.size()); break;
 			}
 			
-			// disable unused input branches.
-			int io_dir = 0; // 0 for input branch, 1 for output branch
-			if(ActiveInputBranches.size() &&
-				std::find(ActiveInputBranches.begin(),ActiveInputBranches.end(),"*")==ActiveInputBranches.end()){
-				for(auto&& abranch : default_branches){
-					if(std::find(ActiveInputBranches.begin(),ActiveInputBranches.end(),abranch) ==
-						ActiveInputBranches.end()){
-						skroot_zero_branch_(&LUN, &io_dir, abranch.c_str(), abranch.size());
+			// the following are not relevant for WRITE mode
+			if(skrootMode!=SKROOTMODE::WRITE){
+				// set the input file(s) to read.
+				// These need to be paths to files - glob patterns are not supported.
+				// Only the first will be used to retrieve the RareList, but multiple calls can
+				// be made to add subsequent files to the TChain.
+				// This doesn't yet open the files, it just adds them to a list of strings.
+				for(std::string& fname_in : list_of_files){
+					skroot_set_input_file_(&LUN, fname_in.c_str(), fname_in.size());
+				}
+				
+				// disable unused input branches.
+				int io_dir = 0; // 0 for input branch, 1 for output branch
+				if(ActiveInputBranches.size() &&
+					std::find(ActiveInputBranches.begin(),
+					          ActiveInputBranches.end(),"*")==ActiveInputBranches.end()){
+					for(auto&& abranch : default_branches){
+						if(std::find(ActiveInputBranches.begin(),ActiveInputBranches.end(),abranch) ==
+							ActiveInputBranches.end()){
+							skroot_zero_branch_(&LUN, &io_dir, abranch.c_str(), abranch.size());
+						}
 					}
 				}
 			}
-		}
-		// disable unwanted output branches. Only applicable to COPY mode
-		if(skrootMode==SKROOTMODE::COPY){
-			int io_dir = 1;
-			if(ActiveOutputBranches.size() &&
-				std::find(ActiveOutputBranches.begin(),ActiveOutputBranches.end(),"*")==ActiveOutputBranches.end()){
-				for(auto&& abranch : default_branches){
-					if(std::find(ActiveOutputBranches.begin(),ActiveOutputBranches.end(),abranch) ==
-						ActiveOutputBranches.end()){
-						skroot_zero_branch_(&LUN, &io_dir, abranch.c_str(), abranch.size());
+			// disable unwanted output branches. Only applicable to COPY mode
+			if(skrootMode==SKROOTMODE::COPY){
+				int io_dir = 1;
+				if(ActiveOutputBranches.size() &&
+					std::find(ActiveOutputBranches.begin(),
+					          ActiveOutputBranches.end(),"*")==ActiveOutputBranches.end()){
+					for(auto&& abranch : default_branches){
+						if(std::find(ActiveOutputBranches.begin(),ActiveOutputBranches.end(),abranch) ==
+							ActiveOutputBranches.end()){
+							skroot_zero_branch_(&LUN, &io_dir, abranch.c_str(), abranch.size());
+						}
 					}
 				}
 			}
-		}
-		
-		// ok now we perform the actual file opening, TTree cloning, and branch address setting.
-		// except in the case of 'write', where all necessary steps are done on construction
-		if(skrootMode!=SKROOTMODE::WRITE){
-			skroot_init_(&LUN);
+			
+			// ok now we perform the actual file opening, TTree cloning, and branch address setting.
+			// except in the case of 'write', where all necessary steps are done on construction
+			if(skrootMode!=SKROOTMODE::WRITE){
+				skroot_init_(&LUN);
+			}
+			
+		} else {
+			// else input files are ZEBRA files
+			// Set rflist and open file
+			// '$SKOFL_ROOT/iolib/set_rflist.F' is used for setting the input file to open.
+			// This copies the input filename into the RFLIST common block.
+			// It doesn't seem to suppport storing arrays of filenames, so we'll need to loop over
+			// the list of input files as we read, rather than simply setting them all in initialize.
+			// See also $RELICWORKDIR/mc_sim/inject_dummy/src/set_rflistC.F
+			/*set_rflist_(&lun, inFilePath.Data(),
+				        "LOCAL", "", "RED", "", "", "recl=5670 status=old", "", "",
+				        inFilePath.Length(), 5, 0, 3, 0, 0, 20, 0, 0);
+			int fileIndex = 1; // 1st file in rflist
+			int openError;
+			skopenf_(&lun, &fileIndex, "Z", &get_ok);*/
+			
+			// we also have the wrapper fort_fopen, which seems to be a slightly simpler interface.
+			// See '$RELICWORKDIR/data_reduc/third/tools_nov19/root2zbs/fort_fopen.F'
+			// or  '$ATMPD_ROOT/src/analysis/tutorials/fort_fopen.F'
+			// (the latter seems to be a bit more fleshed out, supporting both read and write;
+			//  see '$RELICWORKDIR/lomufit/mufit/src.sonia/check_mc/zbs_double_events.F'
+			//  for writing ZBS files with set_rflist.)
+			// See '$SKOFL_ROOT/src/iolib/skopenf.f' for some options e.g. on the meaning of the ftype argument
+			int rw = 0;                     // = 0 reading, = 1 for writing
+			char ftype = 'z';               // 'z' = zebra is probably the only one we need
+			skheadf_.sk_file_format = 0;    // set common block variable for ZBS format
+			// we'll invoke fort_fopen with each file in turn until we have none left.
+			// one way we can do this is reverse the list and use pop_back as we go
+			std::reverse(list_of_files.begin(), list_of_files.end());
+			// open the first file
+			std::string next_file = list_of_files.back();
+			fort_fopen_(&LUN , next_file.c_str(),&ftype,&rw, next_file.length());
+			list_of_files.pop_back();
 		}
 		
 		// we can access the manager via:
@@ -206,9 +253,6 @@ bool TreeReader::Initialise(std::string configfile, DataModel &data){
 		// and so depend on there being an underlying TreeManager.
 		// There are a few extra steps we need to do to initialize up the fortran common blocks...
 		
-		// "initialize data structures" it says..? We need this even for ROOT files.
-		kzinit_();
-		
 		// Warning!
 		// XXX i'm not sure what of the following (if any) should be called in 'write' mode XXX
 		// So... modify if needed. Please explain any changes in comments.
@@ -219,13 +263,34 @@ bool TreeReader::Initialise(std::string configfile, DataModel &data){
 		// options for masking OD / dead / noisy channels
 		skbadopt_(&skroot_badopt);
 		
+		// skoptn 25 indicates that skread should mask bad channels.
+		// skoptn 26 indicates that the set of bad channels should be looked up based
+		// on the run and subrun of the current event.
+		// For MC or calibration files, skoptn 26 should *not* be given and instead
+		// skbadch should be called with a reference run to use for the bad channel list.
+		if(skroot_options.find("25")!=std::string::npos && skroot_options.find("26")==std::string::npos){
+			if(skroot_badch_ref_run==-1){
+				Log(toolName+" Error! skbadoptn contains 25 (mask bad channels) but not 26 "
+					+"(look up bad channels based on run number). In this case one needs to provide "
+					+"a reference run to use for the bad channel list! Please specify a run to use in "
+					+"option skbadchrefrun in "+toolName+" config",v_error,verbosity);
+				return false;
+			}
+			Log(toolName+" masking bad channels with reference run "
+				+toString(skroot_badch_ref_run),v_debug,verbosity);
+			int refSubRunNo = 1;   // lowe school suggested "normally use subrun 1"
+			int outputErrorStatus = 0;
+			skbadch_(&skroot_badch_ref_run, &refSubRunNo, &outputErrorStatus);
+		}
+		
 		// need to set skgeometry in skheadg common block
 		skheadg_.sk_geometry = sk_geometry;
 		geoset_();
 		
-		if(skrootMode!=SKROOTMODE::WRITE){
-			// after opening the file with a TreeManager we should still be able to access it
-			// with an MTreeReader in parallel, should we want a nicer interface...
+		// we can provide an MTreeReader except in SKROOT::WRITE mode or when reading zebra files
+		if(skrootMode!=SKROOTMODE::ZEBRA && skrootMode!=SKROOTMODE::WRITE){
+			// since an MTreeReader provides passive file access
+			// it doesn't interfere with the use of a TreeManager
 			Log(toolName+" creating MTreeReader in parallel to TreeManager",v_debug,verbosity);
 			TTree* intree = skroot_get_tree(&LUN);  // n.b. no trailing underscore for this one
 			get_ok = myTreeReader.Load(intree);
@@ -244,22 +309,11 @@ bool TreeReader::Initialise(std::string configfile, DataModel &data){
 			// The below works, but it spits out: "error reading the root tree"
 			// until it finds a data event. Safe to ignore, but misleading...
 			while(true){
-				skroot_next_entry_(&LUN,&get_ok);
-				if(get_ok){
-					std::cerr<<"hit end of tree in checking for MC!"<<std::endl;
-					break;
-				}
-				skcread_(&LUN, &get_ok);
+				skcread_(&LUN, &get_ok); // get_ok = 0 (physics entry), 1 (error), 2 (EOF), other (non-physics)
 				std::cout<<"entry returned "<<get_ok<<std::endl;
-				if(get_ok<1) break;
+				if(get_ok==0 || get_ok==2) break;
 			}
-			const Header* header;
-			myTreeReader.Get("HEADER", header);
-			if(header==nullptr){
-				Log(toolName+" failed to get header of first data event entry!",v_error,verbosity);
-			} else {
-				isMC = (header->mdrnsk==0 || header->mdrnsk==999999);
-			}
+			isMC = (skhead_.mdrnsk==0 || skhead_.mdrnsk==999999);
 			*/
 			// We could instead just copy the checks for PDST / RUNINFO entries
 			// from the top of headsk.F and avoid using skcread.
@@ -293,6 +347,7 @@ bool TreeReader::Initialise(std::string configfile, DataModel &data){
 			
 			// put this MC flag into the MTreeReader
 			myTreeReader.SetMCFlag(isMC);
+			m_data->vars.Set("inputIsMC",true);
 			
 			// if we're processing MC, we should probably only call `skread`. If we're processing
 			// data, we probably need to call `skrawread` as well. (see ReadEntry for more info).
@@ -302,9 +357,27 @@ bool TreeReader::Initialise(std::string configfile, DataModel &data){
 			} else {
 				skreadMode = skreadUser-1;
 			}
-		}
+			
+		} else if(skrootMode==SKROOTMODE::ZEBRA){
+			// fall back to using skread to scan for MC if we're not reading ROOT files
+			while(true){
+				skcread_(&LUN, &get_ok); // get_ok = 0 (physics entry), 1 (error), 2 (EOF), other (non-physics)
+				Log(toolName + " next isMC scan entry returned "+toString(get_ok),v_debug,verbosity);
+				if(get_ok==0 || get_ok==2) break;
+			}
+			bool isMC = (skhead_.mdrnsk==0 || skhead_.mdrnsk==999999);
+			m_data->vars.Set("inputIsMC",true);
+			
+			if(skreadUser==0){
+				skreadMode = (isMC) ? 0 : 2;  // 0=skread only, 1=skrawread only, 2=both
+			} else {
+				skreadMode = skreadUser-1;
+			}
+			
+		} // else SKROOT::Write mode, cannot check whether it's MC or not.
 		
 	} else {
+		// else not SK ROOT or zebra file; just a plain ROOT file.
 		
 		Log(toolName+" creating MTreeReader to read tree "+treeName,v_debug,verbosity);
 		
@@ -324,34 +397,43 @@ bool TreeReader::Initialise(std::string configfile, DataModel &data){
 		}
 	}
 	
-	// put the reader into the DataModel
-	Log(toolName+" registering tree reader "+readerName,v_debug,verbosity);
-	m_data->Trees.emplace(readerName,&myTreeReader);
+	// put the reader into the DataModel, if we have one
+	if(myTreeReader.GetTree()!=nullptr){
+		Log(toolName+" registering tree reader "+readerName,v_debug,verbosity);
+		m_data->Trees.emplace(readerName,&myTreeReader);
+	}
 	
 	// get first entry to process
-	if(firstEntry>0) entrynum = firstEntry;
+	entrynum = (firstEntry<0) ? 0 : firstEntry;
 	
 	// if we were given a selections file, only read entries that pass the specified cut
 	if(selectionsFile!=""){
-		// make the MTreeSelection to read the TEntryList file
-		myTreeSelections = new MTreeSelection(selectionsFile);
-		m_data->Selectors.emplace(readerName,myTreeSelections);
-		
-		if(cutName=="") cutName = myTreeSelections->GetTopCut();
-		Log(toolName+" reading only entries passing cut "+cutName
-			+" in selections file "+selectionsFile,v_debug,verbosity);
-		
-		// scan to the first entry passing our specified cut
-		Log(toolName+" scanning to first passing entry",v_debug,verbosity);
-		do {
-			entrynum = myTreeSelections->GetNextEntry(cutName);
-		} while(entrynum>0 && entrynum<firstEntry);
-		if(entrynum<0){
-			Log(toolName+" was given both a selections file and a firstEntry,"
-				+" but no passing entries were found after the specified starting entry!",v_error,verbosity);
-			return false;
+		// sanity check if given one in write mode
+		if(skrootMode==SKROOTMODE::WRITE){
+			Log(toolName+" warning! selectionsFile given but we are in SKROOT WRITE mode!",
+				v_warning,verbosity);
+		} else {
+			
+			// make the MTreeSelection to read the TEntryList file
+			myTreeSelections = new MTreeSelection(selectionsFile);
+			m_data->Selectors.emplace(readerName,myTreeSelections);
+			
+			if(cutName=="") cutName = myTreeSelections->GetTopCut();
+			Log(toolName+" reading only entries passing cut "+cutName
+				+" in selections file "+selectionsFile,v_debug,verbosity);
+			
+			// scan to the first entry passing our specified cut
+			Log(toolName+" scanning to first passing entry",v_debug,verbosity);
+			do {
+				entrynum = myTreeSelections->GetNextEntry(cutName);
+			} while(entrynum>0 && entrynum<firstEntry);
+			if(entrynum<0){
+				Log(toolName+" was given both a selections file and a firstEntry,"
+					+" but no passing entries were found after the specified starting entry!",v_error,verbosity);
+				return false;
+			}
+			Log(toolName+" reading from entry "+toString(entrynum),v_debug,verbosity);
 		}
-		Log(toolName+" reading from entry "+toString(entrynum),v_debug,verbosity);
 	}
 	
 	return true;
@@ -360,7 +442,7 @@ bool TreeReader::Initialise(std::string configfile, DataModel &data){
 bool TreeReader::Execute(){
 	
 	// nothing to do in write mode
-	if(skroot==1 && skrootMode==SKROOTMODE::WRITE) return true;
+	if(skrootMode==SKROOTMODE::WRITE) return true;
 	
 	Log(toolName+" getting entry "+toString(entrynum),v_debug,verbosity);
 	
@@ -369,7 +451,12 @@ bool TreeReader::Execute(){
 	// so if requested (on by default) keep reading until we get an event entry.
 	do {
 		// load next entry
-		get_ok = ReadEntry(entrynum);
+		if(skrootMode==SKROOTMODE::ZEBRA && entrynum>firstEntry){
+			// skip the first read in zebra mode as we already loaded it when checking if MC in Initialize
+			get_ok = 1;
+		} else {
+			get_ok = ReadEntry(entrynum);
+		}
 		
 		// get the index of the next entry to read.
 		if(myTreeSelections==nullptr){
@@ -377,7 +464,35 @@ bool TreeReader::Execute(){
 		} else {
 			entrynum = myTreeSelections->GetNextEntry(cutName);
 		}
-	} while(skroot && skip_ped_evts && get_ok==-99); // skip if this is a pedestal/status entry
+		
+		// if we're processing ZBS files and hit the end of this file,
+		// load the next file so we can continue if required.
+		if(skrootMode==SKROOTMODE::ZEBRA && get_ok==0 && list_of_files.size()>0){
+			int rw = 0;
+			char ftype = 'z';
+			std::string next_file = list_of_files.back();
+			fort_fopen_(&LUN , next_file.c_str(), &ftype, &rw, next_file.length());
+			list_of_files.pop_back();
+		}
+		
+	} while(skip_ped_evts && get_ok==-99); // skip if this is a pedestal/status entry
+	
+	// when processing SKROOT files we can't rely on LoadTree(next_entry)
+	// to indicate that there are more events to process - all remaining entries
+	// may be pedestals that get skipped! If we skipped until we hit the end
+	// of the TTree, bail out here as downstream tools will have no data to process.
+	if(get_ok==0){
+		m_data->vars.Set("Skip",true);
+		m_data->vars.Set("StopLoop",true);
+	}
+	
+//	// FIXME buffer N events, or buffer pairs of events based on trigger type;:
+//    // SHE
+//    if (skhead_.idtgsk & 1<<28);
+//    // AFT
+//    else if (skhead_.idtgsk & 1<<29);
+//    // Else
+//    else;
 	
 	++readEntries;  // keep track of the number of entries we've actually returned
 	
@@ -388,9 +503,11 @@ bool TreeReader::Execute(){
 	}
 	// use LoadTree to check if the next entry is valid without loading it
 	// (this checks whether we've hit the end of the TTree/TChain)
-	else if(myTreeReader.GetTree()->LoadTree(entrynum)<0){
-		Log(toolName+" reached end of TTree, setting StopLoop",v_message,verbosity);
-		m_data->vars.Set("StopLoop",1);
+	else if(myTreeReader.GetTree()){  // only possible if we have a TreeReader
+		if(myTreeReader.GetTree()->LoadTree(entrynum)<0){
+			Log(toolName+" reached end of TTree, setting StopLoop",v_message,verbosity);
+			m_data->vars.Set("StopLoop",1);
+		}
 	}
 	
 	return true;
@@ -400,7 +517,7 @@ bool TreeReader::Finalise(){
 	
 	if(myTreeSelections) delete myTreeSelections;
 	
-	if(skroot){
+	if(skrootMode!=SKROOTMODE::NONE){
 		CloseLUN();                 // deletes tree, file, TreeManager.
 		myTreeReader.SetClosed();   // tell the MTreeReader the file is closed.
 	}
@@ -421,7 +538,7 @@ bool TreeReader::Finalise(){
 int TreeReader::ReadEntry(long entry_number){
 	int bytesread=1;
 	// load next entry data from TTree
-	if(skroot){
+	if(skrootMode!=SKROOTMODE::NONE){
 		
 		// Populating fortran common blocks with SKROOT entry data requires using
 		// SKRAWREAD and/or SKREAD.
@@ -467,11 +584,16 @@ int TreeReader::ReadEntry(long entry_number){
 		// but we will then use either SKRAWREAD or SKREAD with a positive LUN
 		// to increment it to the one we actually want, while also doing any
 		// necessary internal reinitialization of these functions (presumably)
-		int entry_temp = static_cast<int>(entry_number);
-		skroot_jump_entry_(&LUN, &entry_temp, &get_ok);
-		if(get_ok==1){
-			// ran off end of TTree!
-			bytesread=0;
+		if(skrootMode!=SKROOTMODE::ZEBRA){
+			int entry_temp = static_cast<int>(entry_number);
+			skroot_jump_entry_(&LUN, &entry_temp, &get_ok);
+			if(get_ok==1){
+				// ran off end of TTree!
+				bytesread=0;
+			}
+		} else {
+			// no idea how to specify the entry to read in zebra mode... TODO
+			// for now we'll only support sequential reads
 		}
 		
 		// skreadMode: 0=skread only, 1=skrawread only, 2=both
@@ -516,7 +638,7 @@ int TreeReader::ReadEntry(long entry_number){
 		
 		// As mentioned above, neither of these load all TTree branches.
 		// To do that we need to call skroot_get_entry.
-		skroot_get_entry_(&LUN);
+		if(skrootMode!=SKROOTMODE::ZEBRA) skroot_get_entry_(&LUN);
 		
 	} else {
 		// else not using TreeManagers / skread / etc
@@ -534,10 +656,8 @@ int TreeReader::ReadEntry(long entry_number){
 	}
 	// stop loop if we had an error of some kind
 	else if(bytesread<0){
-		 if(bytesread==-1) Log(toolName+" IO error loading next input entry!",v_error,verbosity);
-		 if(bytesread==-2) Log(toolName+" AutoClear error loading next input entry!",v_error,verbosity);
-		 if(bytesread <-2) Log(toolName+" Unknown error "+toString(bytesread)
-		                       +" loading next input entry!",v_error,verbosity);
+		 if(bytesread==-10) Log(toolName+" AutoClear error loading next input entry!",v_error,verbosity);
+		 else Log(toolName+" IO error "+toString(bytesread)+" loading next input entry!",v_error,verbosity);
 		 m_data->vars.Set("StopLoop",1);
 	}
 	
@@ -557,6 +677,7 @@ int TreeReader::LoadConfig(std::string configfile){
 	
 	bool settingInputBranchNames=false;
 	bool settingOutputBranchNames=false;
+	bool skroot=false;
 	
 	// scan over lines in the config file
 	while (getline(fin, Line)){
@@ -613,6 +734,7 @@ int TreeReader::LoadConfig(std::string configfile){
 		else if(thekey=="LUN") LUN = stoi(thevalue);
 		else if(thekey=="skoptn") skroot_options = thevalue;
 		else if(thekey=="skbadopt") skroot_badopt = stoi(thevalue);
+		else if(thekey=="skbadchrun") skroot_badch_ref_run = stoi(thevalue);
 		else if(thekey=="SK_GEOMETRY") sk_geometry = stoi(thevalue);
 		else if(thekey=="skipPedestals") skip_ped_evts = stoi(thevalue); // is this redundant with skoptn?
 		else {
@@ -620,6 +742,8 @@ int TreeReader::LoadConfig(std::string configfile){
 				+"\" - unrecognised variable \""+thekey+"\"",v_error,verbosity);
 		}
 	}
+	
+	if(skroot==false){ skrootMode = SKROOTMODE::NONE; skip_ped_evts=false; }
 	
 	// done parsing, close config file
 	fin.close();

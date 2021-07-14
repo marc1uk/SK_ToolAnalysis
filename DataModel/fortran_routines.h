@@ -30,6 +30,9 @@ extern "C" void skcread_(int*, int*);
 extern "C" void skroot_set_tree_(int*);
 extern "C" void skroot_get_entry_(int*);
 
+// from $ATMPD_ROOT/src/programs/TreeBuilder/examples/fort_fopen.F
+extern "C" void fort_fopen_(int*, const char*, char*, int* ,int);
+
 // read runinf (y/m/d, start time, end time, etc)
 extern "C" void runinfsk_();
 

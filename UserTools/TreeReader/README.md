@@ -28,6 +28,7 @@ skreadMode 0                                   # which set of `skread` or `skraw
 LUN 10                                         # LUN to assign to the file (10)
 skoptn 31,30,26,25                             # options describing what to load via skread/skrawread (31)
 skbadopt 23                                    # which classes of channels to mask (23)
+skbadchrefrun 42428                            # which run to use for bad ch list for MC / calibration data
 SK_GEOMETRY 4                                  # which SK geometry this file relates to (4)
 skipPedestals 1                                # whether to skip pedestal and status entries (1)
 
@@ -40,6 +41,7 @@ Notes:
 * if maxEntries is not given or less than 0, all entries in the file will be read.
 * skrootMode: 2=read, 1=write, 0=root2root copy.
 * skreadMode: on each entry call... 3=both `skrawread` and `skread`, 2=`skrawread` only, 1=`skread` only, 0=`auto` - both if input file has no MC branch, only `skread` otherwise.
+* if skoptn contains 25 (mask bad channels) but not 26 (get bad ch list based on current run number), then a reference run must be provided in skbadchrefrun. skoptn 26 cannot be used with MC data files.
 * LUN will only be respected if it is not already in use. Otherwise the next free LUN will be used. Assignments start from 10.
 * skipPedestals will load the next entry for which `skread` or `skrawread` did not return 3 or 4 (not pedestal or runinfo entry).
 * To optimize reading speed only enable branches you intend to use. Specify a list of input branches as follows:

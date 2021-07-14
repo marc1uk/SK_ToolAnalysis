@@ -28,7 +28,7 @@ double PdgToMass(int code);
 void PrintVector(TVector3& avec, bool newline=false);
 void PrintVector(TLorentzVector& avec, bool newline=false);
 
-enum class SKROOTMODE : int { READ = 2, WRITE = 1, COPY = 0 };
+enum class SKROOTMODE : int { NONE = 4, ZEBRA = 3, READ = 2, WRITE = 1, COPY = 0 };
 
 namespace constants{
 	
