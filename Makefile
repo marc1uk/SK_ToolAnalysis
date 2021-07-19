@@ -5,8 +5,13 @@ LDFLAGS += -L${HOME}/skrootlibs -L${HOME}/stllibs -L${HOME}/relic_sk4_ana/relic_
 # user libraries
 LOCAL_LIBS = -lRootStl -lthirdredvars
 
+# not all fortran routines are built into libraries...
+# figure out why standalones don't need to specify a full path when listing in dependencies of a target....?
+LOCAL_OBJS = $(SKOFL_ROOT)/examples/root2zbs/fort_fopen.o $(ATMPD_ROOT)/src/analysis/neutron/merge/zbsinit.o
+LOCAL_LIBS += $(LOCAL_OBJS)
+
 # lowe libraries - some of these may not be required in this list
-LDLIBS += -lbonsai_3.3 -lsklowe_7.0 -lwtlib_5.1 -lsollib_4.0 -lskrd -lsklib -lskroot -liolib -llibrary
+LDLIBS += -lbonsai_3.3 -lsklowe_7.0 -lwtlib_5.1 -lsollib_4.0 -lskrd -lsklib -lskroot -liolib -llibrary -lConnectionTableReader
 LDLIBS += `cernlib graflib grafX11 packlib mathlib kernlib lapack3 blas`
 
 LD_RUN_PATH=$(SKOFL_LIBDIR):$(A_LIBDIR)

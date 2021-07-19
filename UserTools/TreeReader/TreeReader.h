@@ -10,6 +10,8 @@
 #include "SkrootHeaders.h" // MCInfo, Header etc.
 #include "Constants.h"
 
+#include "fortran_routines.h"
+
 /**
 * \class TreeReader
 *
@@ -27,10 +29,15 @@ class TreeReader: public Tool {
 	bool Execute();   ///< Execute function used to perform Tool purpose.
 	bool Finalise();  ///< Finalise funciton used to clean up resources.
 	
+	// we need to provide access to these functions via the DataModel...
+	bool HasAFT();
+	bool LoadAFT();
+	bool LoadSHE();
+	
 	private:
 	// functions
 	// =========
-	int ReadEntry(long entry_number);
+	int ReadEntry(long entry_number, bool load_aft=false);
 	int LoadConfig(std::string configfile);
 	int GenerateNewLUN();
 	void CloseLUN();
@@ -47,19 +54,25 @@ class TreeReader: public Tool {
 	int maxEntries=-1;
 	int firstEntry=0;
 	int entrynum=0;
-	int readEntries=0; // count how many TTree entries we've actually processed
-	SKROOTMODE skrootMode = SKROOTMODE::READ; // default to read
-	int skreadMode=0;  // 0=skread only, 1=skrawread only, 2=both
-	int skreadUser=0;  // 0=auto, 1=skread only, 2=skrawread only, 3=both
-	int LUN=10; // This is assumed 10 by some SKROOT algorithms so only override if you know what you're doing!
+	int readEntries=0;                // count how many entries we've actually returned
+	SKROOTMODE skrootMode=SKROOTMODE::READ;  // default to read
+	int skreadMode=0;                 // 0=skread only, 1=skrawread only, 2=both
+	int skreadUser=0;                 // 0=auto, 1=skread only, 2=skrawread only, 3=both
+	int LUN=10;                       // Assumed 10 by some SK routines, only change if you know what you're doing!
 	std::string skroot_options="31";  // 31 = read HEADER (required).
 	int skroot_badopt=23;             // 23 = LOWE default (mask bad chs, dead chs, noisy ID chs and OD chs)
 	int skroot_badch_ref_run=0;       // reference run for bad channel list for e.g. MC.
 	int sk_geometry=4;                // TODO increment the default to 6.
 	std::string outputFile="";        // for when using SKROOT copy mode
-	int skip_ped_evts = 1; // automatically skip to next ttree entry if skread returns 1 (pedestal/status entry)
+	int skip_ped_evts = 1;            // automatically skip pedestal/status TTree entries
+	bool loadSheAftPairs=false;       // should we load and buffer the AFT for an SHE event, if there is one?
+	bool onlyPairs=false;             // should we only return pairs of SHE+AFT events
+	int entriesPerExecute=1;          // alternatively, read and buffer N entries per Execute call
 	
 	std::vector<std::string> list_of_files;
+	
+	bool has_aft;    // do we have an AFT event buffered that matches this SHE event
+	bool aft_loaded=false; // is the AFT loaded into the common blocks at present
 	
 	// verbosity levels: if 'verbosity' < this level, the message type will be logged.
 	int verbosity=1;
@@ -76,6 +89,81 @@ class TreeReader: public Tool {
 	MTreeSelection* myTreeSelections=nullptr;  // a set of entries one or more cuts
 	std::vector<std::string> ActiveInputBranches;
 	std::vector<std::string> ActiveOutputBranches;
+	
+	// functions involved in buffering common blocks
+	// to load SHE+AFT pairs together
+	int PushCommons();
+	int PopCommons();
+	int FlushCommons();
+	bool LoadCommons(int buffer_i);
+	bool LoadNextZbsFile();
+	
+	// common blocks to buffer
+	// =======================
+	// TODO trim down this list, almost certainly many of these are either
+	// not populated by skread/skrawread, or are not used by reconstruction algorithms
+	// and therefore do not need to be buffered.
+	// TODO right now these do not really need to be vectors, since we only ever fill
+	// them with at most one entry. Generlizing for storing buffering many entries,
+	// but ... simplify if this is not useful.
+	
+	// event header - run, event numbers, trigger info...
+	std::vector<skhead_common> skhead_vec;
+	std::vector<skheada_common> skheada_vec;
+	std::vector<skheadg_common> skheadg_vec;
+	std::vector<skheadf_common> skheadf_vec;
+	std::vector<skheadc_common> skheadc_vec;
+	std::vector<skheadqb_common> skheadqb_vec;
+	
+	// low-e event variables
+	std::vector<skroot_lowe_common> skroot_lowe_vec;
+	std::vector<skroot_mu_common> skroot_mu_vec;
+	std::vector<skroot_sle_common> skroot_sle_vec;
+	
+	// commons containing arrays of T, Q, ICAB....
+	std::vector<skq_common> skq_vec;
+	std::vector<skqa_common> skqa_vec;
+	std::vector<skt_common> skt_vec;
+	std::vector<skta_common> skta_vec;
+	std::vector<skchnl_common> skchnl_vec;
+	std::vector<skthr_common> skthr_vec;
+	std::vector<sktqz_common> sktqz_vec;
+	std::vector<sktqaz_common> sktqaz_vec;
+	std::vector<rawtqinfo_common> rawtqinfo_vec;
+	
+	std::vector<sktrighit_common> sktrighit_vec;
+	std::vector<skqv_common> skqv_vec;
+	std::vector<sktv_common> sktv_vec;
+	std::vector<skchlv_common> skchlv_vec;
+	std::vector<skthrv_common> skthrv_vec;
+	std::vector<skhitv_common> skhitv_vec;
+	std::vector<skpdstv_common> skpdstv_vec;
+	std::vector<skatmv_common> skatmv_vec;
+	
+	// OD mask....? nhits, charge, flag...
+	std::vector<odmaskflag_common> odmaskflag_vec;
+	
+	// hardware trigger variables; counters, trigger words, prevt0...
+	// spacer and trigger info.
+	std::vector<skdbstat_common> skdbstat_vec;
+	std::vector<skqbstat_common> skqbstat_vec;
+	std::vector<skspacer_common> skspacer_vec;
+	
+	// gps word and time.
+	std::vector<skgps_common> skgps_vec;
+	std::vector<t2kgps_common> t2kgps_vec;
+	
+	// hw counter difference to previous event.
+	std::vector<prevt0_common> prevt0_vec;
+	std::vector<tdiff_common> tdiff_vec;
+	std::vector<mintdiff_common> mintdiff_vec;
+	
+	// trigger hardware counters, word, spacer length...
+	std::vector<sktrg_common> sktrg_vec;
+	
+	// MC particles and vertices, event-wise.
+	std::vector<vcvrtx_common> vcvrtx_vec;
+	std::vector<vcwork_common> vcwork_vec;
 	
 };
 

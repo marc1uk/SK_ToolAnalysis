@@ -11,6 +11,29 @@
 #include "MTreeSelection.h"
 #include "fortran_routines.h"
 
+// helper function
+void set_rflist_zbs( int lun, const char *filename, int write ) {
+  std::string file = filename ; 
+  std::string s1 = "LOCAL" ; 
+  std::string s2 = " " ; 
+  std::string s3 = "RED" ;   
+  std::string s4 = " " ; 
+  std::string s5 = " " ; 
+  std::string s6 = "recl=5670 status=old" ; 
+  std::string s7 = " " ; 
+  std::string s8 = " "  ; 
+  if ( write>0 ) {
+    s3 = "WRT" ;
+    s6 = "recl=5670 status=new" ;
+  }
+  set_rflist_( lun, file.data(), 
+	       s1.data(), s2.data(), s3.data(), s4.data(), 
+	       s5.data(), s6.data(), s7.data(), s8.data(), 
+	       file.length(),  
+	       s1.length(), s2.length(), s3.length(), s4.length(), 
+	       s5.length(), s6.length(), s7.length(), s8.length() )  ;
+}
+
 TreeReader::TreeReader():Tool(){
 	// get the name of the tool from its class name
 	toolName=type_name<decltype(this)>(); toolName.pop_back();
@@ -77,7 +100,10 @@ bool TreeReader::Initialise(std::string configfile, DataModel &data){
 	}
 	// detect zebra files based on extention of first file
 	std::string firstfile = list_of_files.front();
-	if(firstfile.substr(firstfile.length()-4,firstfile.length())==".zbs"){ skrootMode==SKROOTMODE::ZEBRA; }
+	if(firstfile.substr(firstfile.length()-4,firstfile.length())==".zbs"){
+		Log(toolName+" using zebra mode",v_debug,verbosity);
+		skrootMode=SKROOTMODE::ZEBRA;
+	}
 	
 	// safety check that the requested name to associate to this reader is free
 	get_ok = m_data->Trees.count(readerName);
@@ -128,12 +154,12 @@ bool TreeReader::Initialise(std::string configfile, DataModel &data){
 		// For now we'll just keep our own list of LUNs.
 		GenerateNewLUN();
 		
-		// "initialize data structures".
-		// Allegedly a ZEBRA thing, but we seem to need this even for ROOT files??
-		kzinit_();
-		
 		// slight change in initialization depending on SK root vs zebra
 		if(not (skrootMode==SKROOTMODE::ZEBRA)){
+			Log(toolName+" doing SKROOT initialization",v_debug,verbosity);
+			// "initialize data structures".
+			// Allegedly a ZEBRA thing, but we seem to need this even for ROOT files??
+			kzinit_();
 			
 			// There are 3 modes to the TreeManager:
 			// skroot_open_read_ calls the TreeManager constructor with mode = 2;
@@ -162,6 +188,7 @@ bool TreeReader::Initialise(std::string configfile, DataModel &data){
 				case SKROOTMODE::READ:  skroot_open_read_(&LUN); break;
 				case SKROOTMODE::WRITE: skroot_open_write_(&LUN, outputFile.c_str(), outputFile.size()); break;
 				case SKROOTMODE::COPY:  skroot_open_(&LUN, outputFile.c_str(), outputFile.size()); break;
+				default: break; /* no action, just to quiet compiler warnings */
 			}
 			
 			// the following are not relevant for WRITE mode
@@ -211,36 +238,23 @@ bool TreeReader::Initialise(std::string configfile, DataModel &data){
 			
 		} else {
 			// else input files are ZEBRA files
+			Log(toolName+" doing zebra initialization",v_debug,verbosity);
+			skheadf_.sk_file_format = 0;    // set common block variable for ZBS format
+			
+			zbsinit_();
+			
 			// Set rflist and open file
 			// '$SKOFL_ROOT/iolib/set_rflist.F' is used for setting the input file to open.
+			// (See also $RELICWORKDIR/mc_sim/inject_dummy/src/set_rflistC.F)
 			// This copies the input filename into the RFLIST common block.
-			// It doesn't seem to suppport storing arrays of filenames, so we'll need to loop over
-			// the list of input files as we read, rather than simply setting them all in initialize.
-			// See also $RELICWORKDIR/mc_sim/inject_dummy/src/set_rflistC.F
-			/*set_rflist_(&lun, inFilePath.Data(),
-				        "LOCAL", "", "RED", "", "", "recl=5670 status=old", "", "",
-				        inFilePath.Length(), 5, 0, 3, 0, 0, 20, 0, 0);
-			int fileIndex = 1; // 1st file in rflist
-			int openError;
-			skopenf_(&lun, &fileIndex, "Z", &get_ok);*/
-			
-			// we also have the wrapper fort_fopen, which seems to be a slightly simpler interface.
-			// See '$RELICWORKDIR/data_reduc/third/tools_nov19/root2zbs/fort_fopen.F'
-			// or  '$ATMPD_ROOT/src/analysis/tutorials/fort_fopen.F'
-			// (the latter seems to be a bit more fleshed out, supporting both read and write;
-			//  see '$RELICWORKDIR/lomufit/mufit/src.sonia/check_mc/zbs_double_events.F'
-			//  for writing ZBS files with set_rflist.)
-			// See '$SKOFL_ROOT/src/iolib/skopenf.f' for some options e.g. on the meaning of the ftype argument
-			int rw = 0;                     // = 0 reading, = 1 for writing
-			char ftype = 'z';               // 'z' = zebra is probably the only one we need
-			skheadf_.sk_file_format = 0;    // set common block variable for ZBS format
-			// we'll invoke fort_fopen with each file in turn until we have none left.
-			// one way we can do this is reverse the list and use pop_back as we go
+			// Despite the name i can't see how 'rflist' actually supports a list,
+			// (possibly as some environmental variable..????)
+			// so we'll have to invoke skopenf for each file as we go until we have none left.
+			// One way we can do this is reverse the list and use pop_back until we run out.
 			std::reverse(list_of_files.begin(), list_of_files.end());
-			// open the first file
-			std::string next_file = list_of_files.back();
-			fort_fopen_(&LUN , next_file.c_str(),&ftype,&rw, next_file.length());
-			list_of_files.pop_back();
+			
+			// Load the first file
+			LoadNextZbsFile();
 		}
 		
 		// we can access the manager via:
@@ -256,6 +270,11 @@ bool TreeReader::Initialise(std::string configfile, DataModel &data){
 		// Warning!
 		// XXX i'm not sure what of the following (if any) should be called in 'write' mode XXX
 		// So... modify if needed. Please explain any changes in comments.
+		
+		// need to set skgeometry in skheadg common block
+		std::cout<<"setting geometry to "<<sk_geometry<<std::endl;
+		skheadg_.sk_geometry = sk_geometry;
+		geoset_();
 		
 		// options for what to read etc.
 		skoptn_(const_cast<char*>(skroot_options.c_str()), skroot_options.size());
@@ -282,10 +301,6 @@ bool TreeReader::Initialise(std::string configfile, DataModel &data){
 			int outputErrorStatus = 0;
 			skbadch_(&skroot_badch_ref_run, &refSubRunNo, &outputErrorStatus);
 		}
-		
-		// need to set skgeometry in skheadg common block
-		skheadg_.sk_geometry = sk_geometry;
-		geoset_();
 		
 		// we can provide an MTreeReader except in SKROOT::WRITE mode or when reading zebra files
 		if(skrootMode!=SKROOTMODE::ZEBRA && skrootMode!=SKROOTMODE::WRITE){
@@ -347,7 +362,7 @@ bool TreeReader::Initialise(std::string configfile, DataModel &data){
 			
 			// put this MC flag into the MTreeReader
 			myTreeReader.SetMCFlag(isMC);
-			m_data->vars.Set("inputIsMC",true);
+			m_data->vars.Set("inputIsMC",isMC);
 			
 			// if we're processing MC, we should probably only call `skread`. If we're processing
 			// data, we probably need to call `skrawread` as well. (see ReadEntry for more info).
@@ -360,13 +375,15 @@ bool TreeReader::Initialise(std::string configfile, DataModel &data){
 			
 		} else if(skrootMode==SKROOTMODE::ZEBRA){
 			// fall back to using skread to scan for MC if we're not reading ROOT files
+			std::cout<<"doing isMC check"<<std::endl;
 			while(true){
 				skcread_(&LUN, &get_ok); // get_ok = 0 (physics entry), 1 (error), 2 (EOF), other (non-physics)
 				Log(toolName + " next isMC scan entry returned "+toString(get_ok),v_debug,verbosity);
 				if(get_ok==0 || get_ok==2) break;
 			}
+			std::cout<<"run is "<<skhead_.nrunsk<<", mdrnsk is "<<skhead_.mdrnsk<<std::endl;
 			bool isMC = (skhead_.mdrnsk==0 || skhead_.mdrnsk==999999);
-			m_data->vars.Set("inputIsMC",true);
+			m_data->vars.Set("inputIsMC",isMC);
 			
 			if(skreadUser==0){
 				skreadMode = (isMC) ? 0 : 2;  // 0=skread only, 1=skrawread only, 2=both
@@ -401,6 +418,19 @@ bool TreeReader::Initialise(std::string configfile, DataModel &data){
 	if(myTreeReader.GetTree()!=nullptr){
 		Log(toolName+" registering tree reader "+readerName,v_debug,verbosity);
 		m_data->Trees.emplace(readerName,&myTreeReader);
+	}
+	
+	// register functions to load SHE / AFT commons, if applicable
+	// We use std::mem_fn and std::bind to abstract away knowledge of the TreeReader class,
+	// so that the DataModel can provide a means to invoke the following tool functions
+	// without being aware of this class.
+	if(loadSheAftPairs){
+		std::function<bool()> hasAFT  = std::bind(std::mem_fn(&TreeReader::HasAFT),  std::ref(*this));
+		std::function<bool()> loadSHE = std::bind(std::mem_fn(&TreeReader::LoadSHE), std::ref(*this));
+		std::function<bool()> loadAFT = std::bind(std::mem_fn(&TreeReader::LoadAFT), std::ref(*this));
+		std::function<bool(int)> loadCommons 
+			= std::bind(std::mem_fn(&TreeReader::LoadCommons), std::ref(*this), std::placeholders::_1);
+		m_data->RegisterReader(readerName, hasAFT, loadSHE, loadAFT, loadCommons);
 	}
 	
 	// get first entry to process
@@ -446,36 +476,52 @@ bool TreeReader::Execute(){
 	
 	Log(toolName+" getting entry "+toString(entrynum),v_debug,verbosity);
 	
-	// For SKROOT files most entries are pedestal or status entries that don't actually
-	// contain detector data relating to a physics event. We'll usually want to skip these,
-	// so if requested (on by default) keep reading until we get an event entry.
-	do {
-		// load next entry
-		if(skrootMode==SKROOTMODE::ZEBRA && entrynum>firstEntry){
-			// skip the first read in zebra mode as we already loaded it when checking if MC in Initialize
-			get_ok = 1;
-		} else {
-			get_ok = ReadEntry(entrynum);
-		}
+	// optionally buffer N entries per Execute call
+	if(entriesPerExecute>1) FlushCommons();
+	for(int buffer_entry_i=0; buffer_entry_i<entriesPerExecute; ++buffer_entry_i){
 		
-		// get the index of the next entry to read.
-		if(myTreeSelections==nullptr){
-			entrynum++;
-		} else {
-			entrynum = myTreeSelections->GetNextEntry(cutName);
-		}
+		// For SKROOT files most entries are pedestal or status entries that don't actually
+		// contain detector data relating to a physics event. We'll usually want to skip these,
+		// so if requested (on by default) keep reading until we get an event entry.
+		do {
+			// load next entry
+			if(skrootMode==SKROOTMODE::ZEBRA && entrynum>firstEntry){
+				// skip the first read in zebra mode as we already loaded it when checking if MC in Initialize
+				Log(toolName+" skipping very first read as we got it from Initialize",v_debug,verbosity);
+				get_ok = 1;
+			} else {
+				Log(toolName+"Reading entry "+toString(entrynum),v_debug,verbosity);
+				get_ok = ReadEntry(entrynum, false);
+				Log(toolName+"ReadEntry returned "+toString(get_ok),v_debug,verbosity);
+				// read the next entry as well to look for SHE+AFT pairs, if applicable
+				if(get_ok==-103){
+					Log(toolName+" Re-Invoking ReadEntry to check next entry",v_debug,verbosity);
+					ReadEntry(entrynum, true);
+					Log(toolName+" Follow-up read returned "+toString(get_ok),v_debug,verbosity);
+				}
+			}
+			
+			// get the index of the next entry to read.
+			if(myTreeSelections==nullptr){
+				entrynum++;
+			} else {
+				entrynum = myTreeSelections->GetNextEntry(cutName);
+			}
+			
+			// if we're processing ZBS files and have hit the end of this file,
+			// load the next file so we can continue if required.
+			if(get_ok==0 && skrootMode==SKROOTMODE::ZEBRA && list_of_files.size()>0){
+				skclosef_(&LUN);
+				LoadNextZbsFile();
+				get_ok = -999;
+			}
+			
+		} while((skip_ped_evts && get_ok==-99) || get_ok==-999);
+		// continue to next entry if this is a pedestal/status entry, or if we needed to open a new file.
 		
-		// if we're processing ZBS files and hit the end of this file,
-		// load the next file so we can continue if required.
-		if(skrootMode==SKROOTMODE::ZEBRA && get_ok==0 && list_of_files.size()>0){
-			int rw = 0;
-			char ftype = 'z';
-			std::string next_file = list_of_files.back();
-			fort_fopen_(&LUN , next_file.c_str(), &ftype, &rw, next_file.length());
-			list_of_files.pop_back();
-		}
-		
-	} while(skip_ped_evts && get_ok==-99); // skip if this is a pedestal/status entry
+		if(entriesPerExecute>1) PushCommons();
+		if(get_ok==0) break;
+	} // read and buffer loop
 	
 	// when processing SKROOT files we can't rely on LoadTree(next_entry)
 	// to indicate that there are more events to process - all remaining entries
@@ -486,15 +532,8 @@ bool TreeReader::Execute(){
 		m_data->vars.Set("StopLoop",true);
 	}
 	
-//	// FIXME buffer N events, or buffer pairs of events based on trigger type;:
-//    // SHE
-//    if (skhead_.idtgsk & 1<<28);
-//    // AFT
-//    else if (skhead_.idtgsk & 1<<29);
-//    // Else
-//    else;
-	
-	++readEntries;  // keep track of the number of entries we've actually returned
+	++readEntries;      // keep track of the number of entries we've actually returned
+	aft_loaded = false; // reset this on every execution
 	
 	// check if we've hit the user-requested limit on number of entries to read
 	if((maxEntries>0)&&(readEntries>=maxEntries)){
@@ -535,11 +574,11 @@ bool TreeReader::Finalise(){
 	return true;
 }
 
-int TreeReader::ReadEntry(long entry_number){
+int TreeReader::ReadEntry(long entry_number, bool load_aft){
 	int bytesread=1;
 	// load next entry data from TTree
 	if(skrootMode!=SKROOTMODE::NONE){
-		
+		Log(toolName+" ReadEntry using SK fortran routines to load data into common blocks",v_debug,verbosity);
 		// Populating fortran common blocks with SKROOT entry data requires using
 		// SKRAWREAD and/or SKREAD.
 		// These functions call various skroot_get_* functions to retrieve branch data.
@@ -596,54 +635,71 @@ int TreeReader::ReadEntry(long entry_number){
 			// for now we'll only support sequential reads
 		}
 		
-		// skreadMode: 0=skread only, 1=skrawread only, 2=both
-		if(bytesread>0 && skreadMode>0){
-			skcrawread_(&LUN, &get_ok); // N.B. positive LUN (see above)
-			if(get_ok==1){
-				Log(toolName+" read error "+toString(get_ok)+" calling skcrawread ",v_error,verbosity);
-				// lf_allfit actually continues the read loop if this is encountered,
-				// so perhaps this is a recoverable error, or just an error relating to this entry?
-				// FIXME if so it may be better to continue to next entry instead of bailing
-				bytesread = -1;
-			} else if(get_ok==2){
-				// this just indicates we've reached the end of the file
-				// if we've hit this, it's not good, because downstream tools
-				// won't have any valid data!
-				bytesread = 0;
-			} else if(get_ok!=0) {
-				// pedestal or status entry, no detector data, not an actual event
-				// 3 = pedestal entry, 4 = runinfo entry.
-				//Log(toolName+" skrawread pedestal or status event, skipping",v_debug,verbosity);
-				// this happens a lot...
-				bytesread = -99;
+		if(skrootMode==SKROOTMODE::ZEBRA && load_aft==false && skhead_vec.size()>0){
+			Log(toolName+" buffered ZEBRA entry, it isn't AFT, using in place of read",v_debug,verbosity);
+			// if we have a buffered entry in hand, but it is not marked as an AFT trigger
+			// for the current readout, then the buffered entry is an unprocessed event.
+			// bypass the read and just load in the buffered data into the common blocks.
+			LoadCommons(0);
+			// then pop off the buffered data
+			PopCommons();
+		} else {
+			Log(toolName+" reading next entry from file",v_debug,verbosity);
+			// use skread / skrawread to get the next TTree entry and populate Fortran common blocks
+			// skreadMode: 0=skread only, 1=skrawread only, 2=both
+			if(bytesread>0 && skreadMode>0){
+				Log(toolName+" calling SKRAWREAD",v_debug,verbosity);
+				skcrawread_(&LUN, &get_ok); // N.B. positive LUN (see above)
+				if(get_ok==1){
+					Log(toolName+" read error "+toString(get_ok)+" calling skcrawread ",v_error,verbosity);
+					// lf_allfit actually continues the read loop if this is encountered,
+					// so perhaps this is a recoverable error, or just an error relating to this entry?
+					// FIXME if so it may be better to continue to next entry instead of bailing
+					bytesread = -1;
+				} else if(get_ok==2){
+					// this just indicates we've reached the end of the file
+					// if we've hit this, it's not good, because downstream tools
+					// won't have any valid data!
+					bytesread = 0;
+				} else if(get_ok!=0) {
+					// pedestal or status entry, no detector data, not an actual event
+					// 3 = pedestal entry, 4 = runinfo entry.
+					//Log(toolName+" skrawread pedestal or status event, skipping",v_debug,verbosity);
+					// this happens a lot...
+					bytesread = -99;
+				}
+			}
+			if(bytesread>0 && skreadMode!=1){  // skip skread if skrawread had an error
+				Log(toolName+" calling SKREAD",v_debug,verbosity);
+				int LUN2 = LUN;
+				if(skreadMode==2) LUN2 = -LUN;  // if we already called skrawread, use a negative LUN
+				skcread_(&LUN2, &get_ok);
+				if(get_ok==1){
+					// error reading entry
+					bytesread = -1;
+				} else if(get_ok==2){
+					// end of file
+					bytesread = 0;
+				} else if(get_ok!=0) {
+					// pedestal or status entry
+					bytesread = -99;
+				}
+			}
+			
+			// As mentioned above, neither of these load all TTree branches.
+			// To do that we need to call skroot_get_entry.
+			if(skrootMode!=SKROOTMODE::ZEBRA){
+				Log(toolName+" calling skroot_get_entry",v_debug,verbosity);
+				skroot_get_entry_(&LUN);
 			}
 		}
-		if(bytesread>0 && skreadMode!=1){  // skip skread if skrawread had an error
-			int LUN2 = LUN;
-			if(skreadMode==2) LUN2 = -LUN;  // if we already called skrawread, use a negative LUN
-			skcread_(&LUN2, &get_ok);
-			if(get_ok==1){
-				// error reading entry
-				bytesread = -1;
-			} else if(get_ok==2){
-				// end of file
-				bytesread = 0;
-			} else if(get_ok!=0) {
-				// pedestal or status entry
-				bytesread = -99;
-			}
-		}
-		
-		// =============================================================
-		
-		// As mentioned above, neither of these load all TTree branches.
-		// To do that we need to call skroot_get_entry.
-		if(skrootMode!=SKROOTMODE::ZEBRA) skroot_get_entry_(&LUN);
 		
 	} else {
+		Log(toolName+" using MTreeReader to get next TTree entry",v_debug,verbosity);
 		// else not using TreeManagers / skread / etc
 		bytesread = myTreeReader.GetEntry(entry_number);
 	}
+	Log(toolName+" read returned "+toString(get_ok),v_debug,verbosity);
 	
 	// stop loop if we ran off the end of the tree
 	if(bytesread==0){
@@ -652,7 +708,7 @@ int TreeReader::ReadEntry(long entry_number){
 		Log(toolName+" hit end of input file, stopping loop",v_warning,verbosity);
 		m_data->vars.Set("StopLoop",1);
 	} else if(bytesread==-99){
-		//Log(toolName+" skrawread pedestal or status event, skipping",v_debug,verbosity);
+		Log(toolName+" skrawread pedestal or status event",v_debug+10,verbosity);
 	}
 	// stop loop if we had an error of some kind
 	else if(bytesread<0){
@@ -660,6 +716,148 @@ int TreeReader::ReadEntry(long entry_number){
 		 else Log(toolName+" IO error "+toString(bytesread)+" loading next input entry!",v_error,verbosity);
 		 m_data->vars.Set("StopLoop",1);
 	}
+	
+	// if we had an error or hit the end of the tree, return what we have
+	if(bytesread<=0) return bytesread;
+	
+	/////////////////////
+	// from here on, we consider also loading a subsequent AFT entry...
+	/////////////////////
+	
+	if(skrootMode!=SKROOTMODE::NONE && loadSheAftPairs){
+		Log(toolName+" PairLoading mode on, perfoming follow-up read",v_debug,verbosity);
+		if(skrootMode==SKROOTMODE::ZEBRA){
+			// ZEBRA files are difficult in that the only way we can know if the next
+			// entry is an AFT trigger associated to this SHE trigger is to read the next entry,
+			// which would overwrite the fortran common blocks.
+			// So what we'll do is buffer the fortran common blocks (which are just structs in C++)
+			// then read the next entry, check if it's AFT, and juggle things around accordingly.
+			if(load_aft){
+				Log(toolName+" we have the next entry in active commons "
+					+"and a prompt entry buffered. Checking trigger word",v_debug,verbosity);
+				// At this point we currently have an unprocessed SHE event in the common block buffers,
+				// and we've just read the next zebra file entry into the fortran common blocks.
+				// Let's now check if the next zebra file entry is an AFT associated to our buffered SHE.
+				std::bitset<sizeof(int)*8> trigger_bits = skhead_.idtgsk;
+				if(trigger_bits.test(29)){
+					Log(toolName+" Successfully found an SHE+AFT pair",v_debug,verbosity);
+					has_aft = true;  // the next entry is indeed an AFT.
+					// this means we have an SHE in buffer and an AFT in the common blocks right now.
+					// swap the SHE event back into the common blocks and AFT into the buffer.
+					LoadCommons(0);
+					// and that's it. This is the desired pair loading.
+				} else {
+					Log(toolName+" Follow-up entry is not AFT",v_debug,verbosity);
+					has_aft = false; // the next entry is NOT an AFT.
+					// we have two options for proceeding here.
+					// If the user ONLY wants SHE+AFT pairs...
+					if(onlyPairs){
+						Log(toolName+" Dropping both entries and starting read process over",v_debug,verbosity);
+						// The currently buffered SHE did not have an associated AFT, so we have no use for it.
+						PopCommons();  // drop it from the buffer.
+						// now moving on to the currently loaded entry in the common blocks.
+						// is this one an SHE trigger?
+						if(trigger_bits.test(28)){
+							// it's SHE. Push this into the buffer...
+							PushCommons();
+							// ... and ask to call ReadEntry again to see if this SHE has an AFT
+							bytesread=-103;
+						} else {
+							// it's not even SHE. We need a whole new event. Indicate to skip this entry.
+							bytesread=-999;
+						}
+					} else {
+						Log(toolName+" Swapping back previous entry, keeping next entry for next Execute call",
+							v_debug,verbosity);
+						// else the user wants an AFT if there is one, but will still accept SHE events
+						// without one. In that case, we still want to process our buffered entry,
+						// so load it back into the common blocks, and retain our next entry in the buffer.
+						LoadCommons(0);
+						// ... we'll look again at the buffered entry on the next Execute call,
+						// instead of reading from file.
+					}
+				}
+			} else {
+				Log(toolName+" first ReadEntry call to load prompt event",v_debug,verbosity);
+				// At this point we're being asked to load an SHE event.
+				// We should have already loaded an entry, either from the buffer or from file.
+				// Check if it's SHE.
+				std::bitset<sizeof(int)*8> trigger_bits = skhead_.idtgsk;
+				if(!trigger_bits.test(28)){
+					Log(toolName+" Prompt entry is not SHE",v_debug,verbosity);
+					// its not SHE. If we only want SHE+AFT pairs, skip this entry.
+					if(onlyPairs){
+						Log(toolName+" Re-starting read process",v_debug,verbosity);
+						bytesread=-999; // XXX should we generalise skipping all non-SHE?
+					} else {
+						Log(toolName+" Will not check for AFT",v_debug,verbosity);
+						has_aft=false;
+						// else it's not SHE, so don't look for an AFT, but still return the entry for processing.
+					}
+				} else {
+					Log(toolName+" Prompt entry is SHE, buffering and checking next entry for AFT",
+						v_debug,verbosity);
+					// it's SHE. Now we need to check if the next entry in the file is an AFT event.
+					// To do this we need to read the next file entry into the fortran common blocks.
+					// So that we don't lose the SHE data, buffer the current entry...
+					PushCommons();
+					// and then ask ReadEntry to be called again, where we'll check if the next entry is an AFT.
+					bytesread=-103;
+				}
+			}
+		} else {
+			// The process is simpler when reading ROOT files because we can 'peek' at the trigger type
+			// of the next entry without loading it into the fortran common blocks.
+			// This means we only call ReadEntry with load_aft==true if we're already sure the
+			// next entry is an AFT trigger associated with this SHE trigger.
+			if(load_aft){
+				Log(toolName+" Successfully found SHE+AFT pair",v_debug,verbosity);
+				// At this point we've just read an AFT entry from a ROOT file.
+				// At this point, then, we know we have an SHE in the buffer and an AFT currently loaded.
+				// We just need to swap the two.
+				has_aft=true;
+				LoadCommons(0);
+			} else {
+				Log(toolName+" Checking for SHE+AFT pair in SK ROOT file",v_debug,verbosity);
+				// At this point we're reading a new event from a ROOT file,
+				// and have just loaded the next file entry. Check if it's an SHE trigger.
+				std::bitset<sizeof(int)*8> trigger_bits = skhead_.idtgsk;
+				if(!trigger_bits.test(28)){
+					Log(toolName+" prompt event is not SHE, skipping AFT check",v_debug,verbosity);
+					// this event is not SHE. If we only want SHE+AFT pairs, flag to skip this entry
+					if(onlyPairs) bytesread=-999;
+					// otherwise no need to check for AFT, just return it for processing.
+				} else {
+					Log(toolName+" prompt event is SHE, peeking at next entry for AFT check",v_debug,verbosity);
+					// this event is SHE. Peek at the next TTree entry to see if it's an associated AFT.
+					get_ok = myTreeReader.GetTree()->GetBranch("HEAD")->GetEntry(entry_number+1);
+					const Header* header;
+					myTreeReader.Get("HEADER", header);
+					std::bitset<sizeof(int)*8> next_trigger_bits = header->idtgsk;
+					get_ok = myTreeReader.GetTree()->GetBranch("HEAD")->GetEntry(entry_number);
+					if(next_trigger_bits.test(29)){
+						Log(toolName+" next entry is AFT, requesting follow-up read",v_debug,verbosity);
+						// The next entry is indeed an AFT. We need to read it in properly now,
+						// so buffer the current SHE data...
+						PushCommons();
+						// ... and indicate that we want to re-run ReadEntry to get the AFT entry.
+						bytesread=-103;
+					} else {
+						Log(toolName+" next entry is not AFT, no AFT this time.",v_debug,verbosity);
+						// Else the next entry is not AFT. So current event is SHE, but has no AFT.
+						has_aft=false;
+						// if we only want pairs, this event can be skipped
+						if(onlyPairs){
+							Log(toolName+" User only wants pairs, dropping SHE and starting "
+								+"read process over",v_debug,verbosity);
+							bytesread=-999;
+						}
+						// otherwise return it anyway, but no need to re-call ReadEntry.
+					}
+				}
+			}
+		} // else ROOT file, not ZEBRA
+	}  // else not processing SHE+AFT pairs
 	
 	return bytesread;
 }
@@ -677,7 +875,7 @@ int TreeReader::LoadConfig(std::string configfile){
 	
 	bool settingInputBranchNames=false;
 	bool settingOutputBranchNames=false;
-	bool skroot=false;
+	bool skFile=false;
 	
 	// scan over lines in the config file
 	while (getline(fin, Line)){
@@ -728,7 +926,7 @@ int TreeReader::LoadConfig(std::string configfile){
 		else if(thekey=="maxEntries") maxEntries = stoi(thevalue);
 		else if(thekey=="selectionsFile") selectionsFile = thevalue;
 		else if(thekey=="cutName") cutName = thevalue;
-		else if(thekey=="skroot") skroot = stoi(thevalue);
+		else if(thekey=="skFile") skFile = stoi(thevalue);
 		else if(thekey=="skrootMode") skrootMode = SKROOTMODE(stoi(thevalue));
 		else if(thekey=="skreadMode") skreadUser = stoi(thevalue);
 		else if(thekey=="LUN") LUN = stoi(thevalue);
@@ -736,14 +934,29 @@ int TreeReader::LoadConfig(std::string configfile){
 		else if(thekey=="skbadopt") skroot_badopt = stoi(thevalue);
 		else if(thekey=="skbadchrun") skroot_badch_ref_run = stoi(thevalue);
 		else if(thekey=="SK_GEOMETRY") sk_geometry = stoi(thevalue);
-		else if(thekey=="skipPedestals") skip_ped_evts = stoi(thevalue); // is this redundant with skoptn?
+		else if(thekey=="skipPedestals") skip_ped_evts = stoi(thevalue);
+		else if(thekey=="readSheAftTogether") loadSheAftPairs = stoi(thevalue);
+		else if(thekey=="onlySheAftPairs") onlyPairs = stoi(thevalue);
+		else if(thekey=="entriesPerExecute") entriesPerExecute = stoi(thevalue);
 		else {
 			Log(toolName+" error parsing config file line: \""+LineCopy
 				+"\" - unrecognised variable \""+thekey+"\"",v_error,verbosity);
 		}
 	}
 	
-	if(skroot==false){ skrootMode = SKROOTMODE::NONE; skip_ped_evts=false; }
+	if(skFile==false){ skrootMode = SKROOTMODE::NONE; }
+	if(loadSheAftPairs){
+		if(entriesPerExecute>1){
+			// SHE+AFT "pairs" represent two common blocks, so it doesn't make much sense to ask
+			// to buffer 10 entries, and at the same time load SHE+AFT pairs together - pairs already
+			// are two array entries, which is no different than with loadSheAftPairs=false
+			// Only way to do this would be to implement some prescription for combining SHE+AFT,
+			// e.g. by simply merging T and Q arrays..? but...that needs more thought, at least.
+			Log(toolName+" Error! readSheAftTogether and entriesPerExecute>1 cannot "
+				+"both be used at the same time. Setting entriesPerExecute=1.",v_warning,verbosity);
+			entriesPerExecute=1;
+		}
+	}
 	
 	// done parsing, close config file
 	fin.close();
@@ -795,9 +1008,294 @@ void TreeReader::CloseLUN(){
 	
 	// close input skroot files, delete the TTreeManager
 	// the SuperManager has a nullptr check so shouldn't seg even if this LUN is invalid
-	skroot_close_(&LUN);
+	if(skrootMode!=SKROOTMODE::ZEBRA) skroot_close_(&LUN);
+	else skclosef_(&LUN);
 	// note that if the LUN wasn't valid, that LUN will now be created in the SuperManager's map
 	// with a nullptr entry, which completely locks the LUN - it doesn't point to a valid TreeManager,
 	// and it's not possible to remove it from the list. TODO fix the SuperManager.
 	
+}
+
+bool TreeReader::LoadNextZbsFile(){
+	// get the next file
+	std::string next_file = list_of_files.back();
+	list_of_files.pop_back();
+	// resolve any environmental variables and symlinks
+	std::string cmd = std::string("readlink -f ")+next_file;
+	Log(toolName+" getting return from command '"+cmd+"'",v_debug+1,verbosity);
+	//next_file = getOutputFromFunctionCall(system, cmd.c_str());  // was crashing???
+	next_file = getOutputFromFunctionCall(safeSystemCall, cmd);
+	Log(toolName+": next ZBS file "+next_file,v_debug,verbosity);
+	
+	// ok now actually open the ZBS file.
+	/*
+	set_rflist_(&LUN, next_file.c_str(), "LOCAL", "", "RED", "", "", "recl=5670 status=old", "", "",
+		        next_file.length(), 5, 0, 3, 0, 0, 20, 0, 0); // lengths of all string args
+	// need to change "LOCAL" to "DISK" and 5 to 4 if file is on /disk... instead of elsewhere....?
+	
+	int fileIndex = 1; // 1st file in rflist (??? does it support multiple ???)
+	int ihndl=1;
+	char ftype='z';
+	skopenf_(&LUN, &fileIndex, &ftype, &get_ok, &ihndl);
+	*/
+	
+	set_rflist_zbs( LUN, next_file.c_str(), 0 );
+	int ipt = 1;
+	skopenf_( LUN, ipt, "Z", get_ok, 1 );
+	
+	if(get_ok!=0){
+		Log(toolName+" Error loading next ZBS file '"+next_file,v_error,verbosity);
+		return false;
+	} else {
+		Log(toolName+" next ZBS file '"+next_file+"' has been loaded",v_debug,verbosity);
+	}
+	return true;
+	
+	/* for reference:
+	// we also have the wrapper fort_fopen, which seems to be a slightly simpler interface
+	// AH... this is only good for WRTITING files (see usage of 'WRT' in sourcefile).
+	// See '$RELICWORKDIR/data_reduc/third/tools_nov19/root2zbs/fort_fopen.F'
+	// or  '$ATMPD_ROOT/src/analysis/tutorials/fort_fopen.F'
+	// (the latter seems to be a bit more fleshed out, supporting both read and write;
+	//  see '$RELICWORKDIR/lomufit/mufit/src.sonia/check_mc/zbs_double_events.F'
+	//  for writing ZBS files with set_rflist.)
+	// See '$SKOFL_ROOT/src/iolib/skopenf.f' for some options e.g. on the meaning of the ftype argument
+	int rw = 0;                     // = 0 reading, = 1 for writing
+	char ftype = 'z';               // 'z' = zebra is probably the only one we need
+	fort_fopen_(&LUN , next_file.c_str(), &ftype, &rw, next_file.length());
+	*/
+	
+}
+
+int TreeReader::PushCommons(){
+	// make a buffered copy of the current state of event-wise fortran common blocks
+	// so that the user may access both SHE and AFT (or potentially arbitrary) events
+	// TODO remove any that are not set by skread and used by reco algorithms
+	
+	// event header - run, event numbers, trigger info...
+	skhead_vec.emplace_back(skhead_);            // skhead_common
+	skheada_vec.emplace_back(skheada_);          // skheada_common
+	skheadg_vec.emplace_back(skheadg_);          // skheadg_common
+	skheadf_vec.emplace_back(skheadf_);          // skheadf_common
+	skheadc_vec.emplace_back(skheadc_);          // skheadc_common
+	skheadqb_vec.emplace_back(skheadqb_);        // skheadqb_common
+	
+	// low-e event variables
+	skroot_lowe_vec.emplace_back(skroot_lowe_);  // skroot_lowe_common
+	skroot_mu_vec.emplace_back(skroot_mu_);      // skroot_mu_common
+	skroot_sle_vec.emplace_back(skroot_sle_);    // skroot_sle_common
+	
+	// commons containing arrays of T, Q, ICAB....
+	// not sure which of these may be populated by skread
+	skq_vec.emplace_back(skq_);                  // skq_common
+	skqa_vec.emplace_back(skqa_);                // skqa_common
+	skt_vec.emplace_back(skt_);                  // skt_common
+	skta_vec.emplace_back(skta_);                // skta_common
+	skchnl_vec.emplace_back(skchnl_);            // skchnl_common
+	skthr_vec.emplace_back(skthr_);              // skthr_common
+	sktqz_vec.emplace_back(sktqz_);              // sktqz_common
+	sktqaz_vec.emplace_back(sktqaz_);            // sktqaz_common
+	rawtqinfo_vec.emplace_back(rawtqinfo_);      // rawtqinfo_common
+	
+	sktrighit_vec.emplace_back(sktrighit_);      // sktrighit_common
+	skqv_vec.emplace_back(skqv_);                // skqv_common
+	sktv_vec.emplace_back(sktv_);                // sktv_common
+	skchlv_vec.emplace_back(skchlv_);            // skchlv_common
+	skthrv_vec.emplace_back(skthrv_);            // skthrv_common
+	skhitv_vec.emplace_back(skhitv_);            // skhitv_common
+	skpdstv_vec.emplace_back(skpdstv_);          // skpdstv_common
+	skatmv_vec.emplace_back(skatmv_);            // skatmv_common
+	
+	// OD mask....? nhits, charge, flag...?
+	odmaskflag_vec.emplace_back(odmaskflag_);    // odmaskflag_common
+	
+	// hardware trigger variables; counters, trigger words, prevt0...
+	// no idea how many, if any, of these are populated by skread,
+	// or moreover how many are needed by reconstruction algorithms.
+	
+	// spacer and trigger info.
+	skdbstat_vec.emplace_back(skdbstat_);        // skdbstat_common
+	skqbstat_vec.emplace_back(skqbstat_);        // skqbstat_common
+	skspacer_vec.emplace_back(skspacer_);        // skspacer_common
+	
+	// gps word and time.
+	skgps_vec.emplace_back(skgps_);              // skgps_common
+	t2kgps_vec.emplace_back(t2kgps_);            // t2kgps_common
+	
+	// hw counter difference to previous event.
+	prevt0_vec.emplace_back(prevt0_);            // prevt0_common
+	tdiff_vec.emplace_back(tdiff_);              // tdiff_common
+	mintdiff_vec.emplace_back(mintdiff_);        // mintdiff_common
+	
+	// trigger hardware counters, word, spacer length...
+	sktrg_vec.emplace_back(sktrg_);              // sktrg_common
+	
+	// MC particles and vertices, event-wise.
+	vcvrtx_vec.emplace_back(vcvrtx_);            // vcvrtx_common
+	vcwork_vec.emplace_back(vcwork_);            // vcwork_common
+	
+	return skhead_vec.size();
+}
+
+int TreeReader::PopCommons(){
+	// drop an entry from the buffered common blocks
+	// TODO remove any that are not set by skread and used by reco algorithms
+	
+	skhead_vec.pop_back();
+	skheada_vec.pop_back();
+	skheadg_vec.pop_back();
+	skheadf_vec.pop_back();
+	skheadc_vec.pop_back();
+	skheadqb_vec.pop_back();
+	skroot_lowe_vec.pop_back();
+	skroot_mu_vec.pop_back();
+	skroot_sle_vec.pop_back();
+	skq_vec.pop_back();
+	skqa_vec.pop_back();
+	skt_vec.pop_back();
+	skta_vec.pop_back();
+	skchnl_vec.pop_back();
+	skthr_vec.pop_back();
+	sktqz_vec.pop_back();
+	sktqaz_vec.pop_back();
+	rawtqinfo_vec.pop_back();
+	sktrighit_vec.pop_back();
+	skqv_vec.pop_back();
+	sktv_vec.pop_back();
+	skchlv_vec.pop_back();
+	skthrv_vec.pop_back();
+	skhitv_vec.pop_back();
+	skpdstv_vec.pop_back();
+	skatmv_vec.pop_back();
+	odmaskflag_vec.pop_back();
+	skdbstat_vec.pop_back();
+	skqbstat_vec.pop_back();
+	skspacer_vec.pop_back();
+	skgps_vec.pop_back();
+	t2kgps_vec.pop_back();
+	prevt0_vec.pop_back();
+	tdiff_vec.pop_back();
+	mintdiff_vec.pop_back();
+	sktrg_vec.pop_back();
+	vcvrtx_vec.pop_back();
+	vcwork_vec.pop_back();
+	
+	return skhead_vec.size();
+}
+
+int TreeReader::FlushCommons(){
+	// drop all entries from the buffered common blocks
+	// TODO remove any that are not set by skread and used by reco algorithms
+	
+	skhead_vec.clear();
+	skheada_vec.clear();
+	skheadg_vec.clear();
+	skheadf_vec.clear();
+	skheadc_vec.clear();
+	skheadqb_vec.clear();
+	skroot_lowe_vec.clear();
+	skroot_mu_vec.clear();
+	skroot_sle_vec.clear();
+	skq_vec.clear();
+	skqa_vec.clear();
+	skt_vec.clear();
+	skta_vec.clear();
+	skchnl_vec.clear();
+	skthr_vec.clear();
+	sktqz_vec.clear();
+	sktqaz_vec.clear();
+	rawtqinfo_vec.clear();
+	sktrighit_vec.clear();
+	skqv_vec.clear();
+	sktv_vec.clear();
+	skchlv_vec.clear();
+	skthrv_vec.clear();
+	skhitv_vec.clear();
+	skpdstv_vec.clear();
+	skatmv_vec.clear();
+	odmaskflag_vec.clear();
+	skdbstat_vec.clear();
+	skqbstat_vec.clear();
+	skspacer_vec.clear();
+	skgps_vec.clear();
+	t2kgps_vec.clear();
+	prevt0_vec.clear();
+	tdiff_vec.clear();
+	mintdiff_vec.clear();
+	sktrg_vec.clear();
+	vcvrtx_vec.clear();
+	vcwork_vec.clear();
+	
+	return 1;
+}
+
+bool TreeReader::LoadCommons(int buffer_i){
+	// check we have such a buffered entry
+	if(buffer_i>=skhead_vec.size()){
+		Log(toolName+" Error! Asked to load common block buffer entry "+toString(buffer_i)
+			+" out of range 0->"+skhead_vec.size()+"!",v_error,verbosity);
+		return false;
+	}
+	
+	std::swap(skhead_, skhead_vec.at(buffer_i));
+	std::swap(skheada_, skheada_vec.at(buffer_i));
+	std::swap(skheadg_, skheadg_vec.at(buffer_i));
+	std::swap(skheadf_, skheadf_vec.at(buffer_i));
+	std::swap(skheadc_, skheadc_vec.at(buffer_i));
+	std::swap(skheadqb_, skheadqb_vec.at(buffer_i));
+	std::swap(skroot_lowe_,skroot_lowe_vec.at(buffer_i));
+	std::swap(skroot_mu_,skroot_mu_vec.at(buffer_i));
+	std::swap(skroot_sle_,skroot_sle_vec.at(buffer_i));
+	std::swap(skq_, skq_vec.at(buffer_i));
+	std::swap(skqa_, skqa_vec.at(buffer_i));
+	std::swap(skt_, skt_vec.at(buffer_i));
+	std::swap(skta_, skta_vec.at(buffer_i));
+	std::swap(skchnl_, skchnl_vec.at(buffer_i));
+	std::swap(skthr_, skthr_vec.at(buffer_i));
+	std::swap(sktqz_, sktqz_vec.at(buffer_i));
+	std::swap(sktqaz_, sktqaz_vec.at(buffer_i));
+	std::swap(rawtqinfo_, rawtqinfo_vec.at(buffer_i));
+	std::swap(sktrighit_, sktrighit_vec.at(buffer_i));
+	std::swap(skqv_, skqv_vec.at(buffer_i));
+	std::swap(sktv_, sktv_vec.at(buffer_i));
+	std::swap(skchlv_, skchlv_vec.at(buffer_i));
+	std::swap(skthrv_, skthrv_vec.at(buffer_i));
+	std::swap(skhitv_, skhitv_vec.at(buffer_i));
+	std::swap(skpdstv_, skpdstv_vec.at(buffer_i));
+	std::swap(skatmv_, skatmv_vec.at(buffer_i));
+	std::swap(odmaskflag_, odmaskflag_vec.at(buffer_i));
+	std::swap(skdbstat_, skdbstat_vec.at(buffer_i));
+	std::swap(skqbstat_, skqbstat_vec.at(buffer_i));
+	std::swap(skspacer_, skspacer_vec.at(buffer_i));
+	std::swap(skgps_, skgps_vec.at(buffer_i));
+	std::swap(t2kgps_, t2kgps_vec.at(buffer_i));
+	std::swap(prevt0_, prevt0_vec.at(buffer_i));
+	std::swap(tdiff_, tdiff_vec.at(buffer_i));
+	std::swap(mintdiff_, mintdiff_vec.at(buffer_i));
+	std::swap(sktrg_, sktrg_vec.at(buffer_i));
+	std::swap(vcvrtx_, vcvrtx_vec.at(buffer_i));
+	std::swap(vcwork_, vcwork_vec.at(buffer_i));
+	
+	return true;
+}
+
+bool TreeReader::HasAFT(){
+	// check if this entry has an AFT event buffered
+	return has_aft;
+}
+
+bool TreeReader::LoadAFT(){
+	if(has_aft && !aft_loaded){
+		aft_loaded = LoadCommons(0);
+		return aft_loaded;
+	} // else either already loaded, or no AFT to load
+	return aft_loaded;
+}
+
+bool TreeReader::LoadSHE(){
+	if(has_aft && aft_loaded){
+		aft_loaded = !LoadCommons(0);
+		return aft_loaded;
+	} // else SHE already loaded
+	return true;
 }

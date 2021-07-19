@@ -5,7 +5,10 @@
 //#include <libgen.h>  // dirname and basename
 #include <sys/stat.h>  // dirname and basename
 #include <sys/types.h> // for stat() test to see if file or folder
-#include <unistd.h>
+#include <unistd.h>    // for system()
+#include <sys/wait.h>  // for wait()
+#include <errno.h>     // for WEXITSTATUS etc
+#include <stdlib.h>    // for fork()?
 //#include <memory>
 //#include <exception>
 //#include <cstring>  // strncpy
@@ -188,4 +191,33 @@ void PrintObjectTable(){
 		if(aline.find("TObjArray")!=std::string::npos) break;
 	}
 	std::cout<<aline<<std::endl;
+}
+
+int safeSystemCall(std::string cmd){
+	int ret=-1;
+	if (fork() == 0){
+		system(cmd.c_str());
+		exit(1);
+	} else {
+		int stat;
+		wait(&stat);
+		ret = stat;
+	}
+	return ret;
+}
+
+int safeSystemCallVerbose(std::string cmd){
+	std::cout<<"getting return from '"+cmd+"'"<<std::endl;
+	int ret=-1;
+	if (fork() == 0){
+		system(cmd.c_str());
+		exit(1);
+	} else {
+		int stat;
+		wait(&stat);
+		ret = WIFEXITED(stat) ? WEXITSTATUS(stat) : WTERMSIG(stat);
+		if(WIFEXITED(stat)){ printf("Exit status: %d\n", WEXITSTATUS(stat)); }  // success? print return val
+		else if(WIFSIGNALED(stat)){ psignal(WTERMSIG(stat), "Exit signal"); }   // fail? print explanation
+	}
+	return ret;
 }

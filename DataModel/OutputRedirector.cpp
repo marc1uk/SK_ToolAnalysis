@@ -87,12 +87,12 @@ CStdoutRedirector::GetOutput()
 {
 	const size_t bufSize = 4096;
 	char buf[bufSize];
-	fcntl( _pipe[READ], F_SETFL, O_NONBLOCK );	
+	fcntl( _pipe[READ], F_SETFL, O_NONBLOCK );
 	ssize_t bytesRead = read( _pipe[READ], buf, bufSize - 1 );
 	while( bytesRead > 0 ) {
 		buf[bytesRead] = 0;
 		_redirectedOutput += buf;
-		bytesRead = read( _pipe[READ], buf, bufSize );
+		bytesRead = read( _pipe[READ], buf, bufSize - 1 );
 	}
 	
 	return _redirectedOutput;

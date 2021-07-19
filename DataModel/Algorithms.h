@@ -28,6 +28,8 @@ double Mag(basic_array<float>& mom);
 bool CheckPath(std::string path, std::string& type);
 std::string ToLower(std::string astring);
 void PrintObjectTable();
+int safeSystemCall(std::string cmd);
+int safeSystemCallVerbose(std::string cmd);
 
 // a header/trailer for trying to capture error messages for calls to functions
 // that do not return any error code, but do print to stderr on error.
@@ -145,6 +147,22 @@ std::string getOutputFromFunctionCall(FunctionType&& FunctionToCall){
 	std::string captured_out = theRedirector.GetOutput();
 	theRedirector.ClearOutput();
 	theRedirector.StopRedirecting();
+	
+	// FIXME using std::cout and std::endl in prints, or e.g. 'system(...)' calls
+	// still seem to have the ToolAnalysis '[1]: ' prefix in printouts.
+	// Figure out how to prevent this, the following is not a good solution.
+	// find and remove these
+	for(int i=0; i<5; ++i){
+		std::string substr="["+toString(i)+"]: ";
+		size_t pos = captured_out.find(substr);
+		while(pos!=std::string::npos){
+			captured_out.erase(pos,substr.length());
+			pos = captured_out.find(substr);
+		}
+	}
+	// trim any trailing newlines
+	while(captured_out.back()=='\n'||captured_out.back()=='\r') captured_out.pop_back();
+	
 	return captured_out;
 }
 
@@ -160,6 +178,18 @@ std::string getOutputFromFunctionCall(FunctionType&& FunctionToCall, Rest... res
 	std::string captured_out = theRedirector.GetOutput();
 	theRedirector.ClearOutput();
 	theRedirector.StopRedirecting();
+	
+	// FIXME prevent, rather than remove (see above version of this function)
+	for(int i=0; i<5; ++i){
+		std::string substr="["+toString(i)+"]: ";
+		size_t pos = captured_out.find(substr);
+		while(pos!=std::string::npos){
+			captured_out.erase(pos,substr.length());
+			pos = captured_out.find(substr);
+		}
+	}
+	// trim any trailing newlines
+	while(captured_out.back()=='\n'||captured_out.back()=='\r') captured_out.pop_back();
 	return captured_out;
 }
 

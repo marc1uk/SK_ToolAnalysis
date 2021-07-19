@@ -2,8 +2,10 @@
 #define DATAMODEL_H
 
 #include <map>
+#include <unordered_map>
 #include <string>
 #include <vector>
+#include <functional>
 
 //#include "TTree.h"
 #include "TApplication.h"
@@ -15,6 +17,7 @@
 
 class MTreeReader;
 class MTreeSelection;
+class TreeReader;
 
 #include <zmq.hpp>
 
@@ -48,10 +51,24 @@ class DataModel {
   std::map<std::string,BoostStore*> Stores; ///< This is a map of named BooStore pointers which can be deffined to hold a nammed collection of any tipe of BoostStore. It is usefull to store data that needs subdividing into differnt stores.
   std::map<std::string,MTreeReader*> Trees; ///< A map of MTreeReader pointers, used to read ROOT trees
   std::map<std::string,MTreeSelection*> Selectors; ///< A map of MTreeSelection pointers used to read event selections
+//  std::map<std::string,TreeReader*> TreeReaders; ///< A map of TreeReader tool pointers, used to invoke LoadSHE/AFT
+  std::unordered_map<std::string, std::function<bool()>> hasAFTs;
+  std::unordered_map<std::string, std::function<bool()>> loadSHEs;
+  std::unordered_map<std::string, std::function<bool()>> loadAFTs;
+  std::unordered_map<std::string, std::function<bool(int)>> loadCommons;
   
   Logging *Log; ///< Log class pointer for use in Tools, it can be used to send messages which can have multiple error levels and destination end points  
 
   zmq::context_t* context; ///< ZMQ contex used for producing zmq sockets for inter thread,  process, or computer communication
+
+  // These call the corresponding TreeReader functions.
+  // The TreeReader instance is obtained from the name specified in their config file.
+  bool HasAFT(std::string ReaderName);
+  bool LoadSHE(std::string ReaderName);
+  bool LoadAFT(std::string ReaderName);
+  bool LoadEntry(std::string ReaderName, int entry_i);
+  
+  bool RegisterReader(std::string readerName, std::function<bool()> hasAFT, std::function<bool()> loadSHE, std::function<bool()> loadAFT, std::function<bool(int)> loadCommon);
 
 
  private:

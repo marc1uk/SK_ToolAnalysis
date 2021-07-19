@@ -14,6 +14,21 @@
 // this last one was manually edited to reflect 'EQUIVALENCE' use (use with caution)
 #include "skroot_loweC.h"
 
+#include "geopmaC.h"
+#include "skwaterlenC.h"
+#include "odmaskflagC.h"
+#include "skdbstatC.h"
+#include "skqbstatC.h"
+#include "skspacerC.h"
+#include "skgpsC.h"
+#include "skprevt0C.h"
+#include "sktrighitC.h"
+#include "sktrgC.h"
+#include "skvetoC.h"
+#include "softtrg_listC.h"
+#include "vcvrtxC.h"
+#include "vcworkC.h"
+
 // header for skroot_* functions. These are actually C functions.
 #include "fortran_interface.h"
 
@@ -23,6 +38,7 @@ extern "C" void skroot_init_(int*);
 extern "C" void kzinit_();
 extern "C" void skoptn_(char*, int);
 extern "C" void skbadopt_(int*);
+extern "C" void skbadch_(int*, int*, int*);
 extern "C" void geoset_();
 extern "C" void delete_outside_hits_();
 extern "C" void skcrawread_(int*, int*);
@@ -55,9 +71,59 @@ extern "C" void lfallfit_sk4_gain_corr_(float*, int*, int*, int*, int*);
 extern "C" void lfallfit_sk4_mc_(float*, int*, int*);
 // skroot_lowe_ common block
 
-// TODO where from
-extern "C" void skbadch_(int*, int*, int*);
-
 // after that there were many undefined references, e.g. `sortzv_`, `hf1_`, `hf2_`...
 // after some trial and error these are resolved, but i lost track of which provided what.
 // cernlibs in particular resolved a lot of repeated undefined issues, they may be the main culprit.
+
+// SK I/O
+extern "C" {
+//    void kzinit_();
+//    void geoset_();
+    void zbsinit_();
+    void kzwrit_(int&);
+    void set_rflist_(int&, const char*, const char*, const char*, const char*,
+                     const char*, const char*, const char*, const char*, const char*,
+                     long, long,  long,  long,  long,  long,  long,  long,  long  );
+    void skopenf_(int&, int&, const char*, int&, long);
+//////    void set_rflist_(int*, const char*, const char*, const char*, const char*,
+//////                     const char*, const char*, const char*, const char*, const char*,
+//////                     int, int, int, int, int, int, int, int, int);
+//////    void skopenf_(int*, int*, const char*, int*, int*);
+//    void skoptn_(const char*, int);
+//    void skbadopt_(int*);
+//    void skbadch_(int*, int*, int*);
+    int  skread_(int*);
+    int  skrawread_(int*);
+    void skclosef_(int*);
+//    void skroot_init_(int*);
+}
+
+// data control
+extern "C" {
+    void  nerdnebk_(float*);
+    void  skgetv_();
+    void  apflscndprt_();
+    void  trginfo_(float*);
+    void  aprstbnk_(int*);
+    void  odpc_2nd_s_(int*);
+    void  inpmt_(float*, int&);
+    float wallsk_(float*);
+}
+
+// BONSAI
+extern "C" {
+    void bonsai_ini_(int*);
+    void bonsai_fit_(int*, float*, float*, float*, int*, int*, float*, float*, float*,
+                     float*, float*, float*, float*, float*, float*);
+    void bonsai_end_();
+}
+
+// stopmu fit
+extern "C" {
+    void stmfit_(float*, float*, float&, float&);
+    void sparisep_(int&, int&, int&, int&);
+    void pfdodirfit_(int&);
+    void sppang_(int&, float&, float&);
+    void spfinalsep_();
+//	float pttruewaterlen_(float&);
+}
